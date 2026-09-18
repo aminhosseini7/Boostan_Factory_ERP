@@ -1,0 +1,1 @@
+const router=require('express').Router();const auth=require('../../middleware/auth');const authorize=require('../../middleware/authorize');const ah=require('../../utils/asyncHandler');const c=require('./reports.controller');router.use(auth,authorize('MANAGER'));router.get('/:type',ah(c.get));router.get('/:type/export/:format',ah(c.download));module.exports=router;

@@ -1,0 +1,4 @@
+const ExcelJS=require('exceljs');const PDFDocument=require('pdfkit');const {getEnv}=require('../../config/env');
+async function toExcel(title,rows){const wb=new ExcelJS.Workbook();const ws=wb.addWorksheet(title.slice(0,31));if(rows.length){ws.columns=Object.keys(rows[0]).map(k=>({header:k,key:k,width:Math.max(14,k.length+4)}));rows.forEach(r=>ws.addRow(r));ws.getRow(1).font={bold:true};}return wb.xlsx.writeBuffer();}
+function toPdf(title,rows){return new Promise((resolve,reject)=>{const doc=new PDFDocument({margin:36,size:'A4'});const chunks=[];doc.on('data',c=>chunks.push(c));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);const fp=getEnv().pdfFontPath;if(fp){try{doc.font(fp);}catch{}}doc.fontSize(16).text(title);doc.moveDown();rows.forEach((r,i)=>{doc.fontSize(8).text(`${i+1}. ${Object.entries(r).map(([k,v])=>`${k}: ${v??''}`).join(' | ')}`);doc.moveDown(.35);});doc.end();});}
+module.exports={toExcel,toPdf};

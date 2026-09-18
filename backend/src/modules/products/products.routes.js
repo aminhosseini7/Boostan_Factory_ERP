@@ -1,0 +1,12 @@
+const router=require('express').Router();
+const auth=require('../../middleware/auth');
+const authorize=require('../../middleware/authorize');
+const ah=require('../../utils/asyncHandler');
+const c=require('./products.controller');
+router.use(auth);
+router.get('/',ah(c.list));
+router.get('/:id',ah(c.get));
+router.post('/',authorize('MANAGER'),ah(c.create));
+router.put('/:id',authorize('MANAGER'),ah(c.update));
+router.delete('/:id',authorize('MANAGER'),ah(c.deactivate));
+module.exports=router;

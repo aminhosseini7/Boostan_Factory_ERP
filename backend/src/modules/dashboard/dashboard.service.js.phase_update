@@ -1,0 +1,18 @@
+// Phase 7 - Management dashboard service
+
+function buildDashboardSummary(data) {
+  return {
+    production: {
+      total: data.productionTotal || 0,
+      good: data.goodProduction || 0,
+      defects: data.defects || 0
+    },
+    sales: {
+      count: data.salesCount || 0,
+      amount: data.salesAmount || 0
+    },
+    inventory: data.inventory || []
+  };
+}
+
+module.exports = { buildDashboardSummary };
