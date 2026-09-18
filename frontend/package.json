@@ -1,0 +1,14 @@
+{
+ "name":"boostan-factory-erp-frontend",
+ "version":"1.0.0",
+ "scripts":{
+  "dev":"vite",
+  "build":"vite build"
+ },
+ "dependencies":{
+  "axios":"^1.7.0",
+  "react":"^18.3.1",
+  "react-dom":"^18.3.1",
+  "react-router-dom":"^6.26.0"
+ }
+}
