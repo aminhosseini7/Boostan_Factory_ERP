@@ -1,0 +1,4 @@
+project_id = "boostan-factory-erp"
+
+[functions.erp-api]
+verify_jwt = false

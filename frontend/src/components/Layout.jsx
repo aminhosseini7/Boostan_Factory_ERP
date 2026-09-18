@@ -1,2 +1,8 @@
 import {NavLink,Outlet,useNavigate} from 'react-router-dom';import {useAuth} from '../context/AuthContext';
-export default function Layout(){const {user,logout,isManager}=useAuth();const nav=useNavigate();const items=[['/','داشبورد',true],['/products','محصولات',true],['/production','تولید',true],['/sales','فروش',true],['/customers','مشتریان',true],['/inventory','انبار',true],['/reports','گزارش‌ها',isManager],['/users','کاربران',isManager]];return <div className="app-shell"><aside className="sidebar"><div className="brand"><b>Boostan</b><span>Factory ERP</span></div><nav>{items.filter(x=>x[2]).map(([to,label])=><NavLink key={to} to={to} end={to==='/' }>{label}</NavLink>)}</nav><div className="userbox"><div>{user?.fullName||user?.username}</div><small>{user?.role==='MANAGER'?'مدیر':'اپراتور'}</small><button className="ghost" onClick={()=>{logout();nav('/login')}}>خروج</button></div></aside><main className="main"><Outlet/></main></div>}
+export default function Layout(){
+  const {user,logout,isManager}=useAuth();const nav=useNavigate();
+  const managerItems=[['/','داشبورد'],['/products','محصولات'],['/production','تولید و شیفت‌ها'],['/sales','فروش'],['/customers','مشتریان'],['/inventory','انبار'],['/reports','گزارش‌ها'],['/users','کاربران']];
+  const operatorItems=[['/operator','پنل عملیات']];
+  const items=isManager?managerItems:operatorItems;
+  return <div className="app-shell"><aside className="sidebar"><div className="brand"><b>Boostan</b><span>Factory ERP</span></div><nav>{items.map(([to,label])=><NavLink key={to} to={to} end={to==='/' }>{label}</NavLink>)}</nav><div className="userbox"><div>{user?.fullName||user?.username}</div><small>{isManager?'مدیر':'اپراتور'}</small><button className="ghost" onClick={()=>{logout();nav('/login')}}>خروج</button></div></aside><main className="main"><Outlet/></main></div>;
+}
