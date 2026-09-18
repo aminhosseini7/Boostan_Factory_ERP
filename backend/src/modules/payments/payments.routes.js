@@ -1,0 +1,1 @@
+const router=require('express').Router();const auth=require('../../middleware/auth');const authorize=require('../../middleware/authorize');const ah=require('../../utils/asyncHandler');const c=require('./payments.controller');router.use(auth,authorize('MANAGER'));router.get('/',ah(c.list));router.post('/',ah(c.create));module.exports=router;

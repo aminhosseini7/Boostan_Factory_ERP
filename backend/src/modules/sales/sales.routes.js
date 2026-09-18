@@ -1,0 +1,1 @@
+const router=require('express').Router();const auth=require('../../middleware/auth');const ah=require('../../utils/asyncHandler');const c=require('./sales.controller');router.use(auth);router.get('/',ah(c.list));router.get('/:id',ah(c.get));router.post('/',ah(c.create));module.exports=router;

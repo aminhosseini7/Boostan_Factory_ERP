@@ -1,7 +1,14 @@
-require('dotenv').config();
-
 const postgres = require('postgres');
+const { getEnv } = require('./env');
 
-const sql = postgres(process.env.DATABASE_URL);
+const env = getEnv();
+
+const sql = postgres(env.databaseUrl, {
+  max: 10,
+  idle_timeout: 20,
+  connect_timeout: 15,
+  ssl: 'require',
+  prepare: false
+});
 
 module.exports = sql;

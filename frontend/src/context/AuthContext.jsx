@@ -1,0 +1,3 @@
+import {createContext,useContext,useMemo,useState} from 'react';
+const C=createContext(null);
+export function AuthProvider({children}){const [user,setUser]=useState(()=>{try{return JSON.parse(localStorage.getItem('boostan_user'))||null}catch{return null}});function login(data){localStorage.setItem('boostan_token',data.token);localStorage.setItem('boostan_user',JSON.stringify(data.user));setUser(data.user);}function logout(){localStorage.removeItem('boostan_token');localStorage.removeItem('boostan_user');setUser(null);}const value=useMemo(()=>({user,login,logout,isManager:user?.role==='MANAGER'}),[user]);return <C.Provider value={value}>{children}</C.Provider>;}export const useAuth=()=>useContext(C);

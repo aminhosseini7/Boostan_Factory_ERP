@@ -1,7 +1,1 @@
-const router = require('express').Router();
-
-router.get('/',(req,res)=>{
-    res.json([]);
-});
-
-module.exports = router;
+const router=require('express').Router();const auth=require('../../middleware/auth');const authorize=require('../../middleware/authorize');const ah=require('../../utils/asyncHandler');const c=require('./inventory.controller');router.use(auth);router.get('/',ah(c.current));router.get('/low-stock',ah(c.low));router.get('/movement/:productId',ah(c.movement));router.post('/adjustments',authorize('MANAGER'),ah(c.adjust));module.exports=router;
