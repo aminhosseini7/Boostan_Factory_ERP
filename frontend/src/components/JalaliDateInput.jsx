@@ -3,6 +3,8 @@ import {normalizeDigits} from '../utils/fa';
 import {jalaliToGregorianDate,todayJalali,toGregorian} from '../utils/jalali';
 
 const months=['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
+const MIN_JALALI_YEAR=1405;
+const MAX_JALALI_YEAR=1410;
 const weekdays=['ش','ی','د','س','چ','پ','ج'];
 const two=n=>String(n).padStart(2,'0');
 export function normalizeJalaliInput(value){
@@ -39,19 +41,19 @@ export default function JalaliDateInput({label,value='',onChange,id}){
   const [open,setOpen]=useState(false);
   const [error,setError]=useState('');
   const current=useMemo(()=>readParts(todayJalali()),[]);
-  const [visible,setVisible]=useState(()=>({year:Number(readParts(value).year||current.year),month:Number(readParts(value).month||current.month)}));
+  const clampYear=year=>Math.min(MAX_JALALI_YEAR,Math.max(MIN_JALALI_YEAR,Number(year)||MIN_JALALI_YEAR));
+  const currentYear=clampYear(current.year);
+  const [visible,setVisible]=useState(()=>({year:clampYear(readParts(value).year||current.year),month:Number(readParts(value).month)||Number(current.month)||1}));
   useEffect(()=>{
     if(value===lastLocalEmission.current){lastLocalEmission.current=null;return;}
     const fromParent=readParts(value);
     setParts(fromParent);
-    if(value)setVisible({year:Number(fromParent.year),month:Number(fromParent.month)});
+    if(value)setVisible({year:clampYear(fromParent.year),month:Number(fromParent.month)||1});
   },[value]);
   function emit(next){lastLocalEmission.current=next;onChange(next);}
   const years=useMemo(()=>{
-    const from=Math.min(1380,Number(parts.year)||Infinity,Number(visible.year)||Infinity);
-    const to=Math.max(Number(current.year)+10,Number(parts.year)||0,Number(visible.year)||0);
-    return Array.from({length:to-from+1},(_,index)=>from+index);
-  },[current.year,parts.year,visible.year]);
+    return Array.from({length:MAX_JALALI_YEAR-MIN_JALALI_YEAR+1},(_,index)=>MIN_JALALI_YEAR+index);
+  },[]);
   const maxDay=parts.year&&parts.month?daysInJalaliMonth(Number(parts.year),Number(parts.month)):31;
   const selectedDay=Number(parts.day)||0;
   function changeParts(field,nextValue){
@@ -69,13 +71,17 @@ export default function JalaliDateInput({label,value='',onChange,id}){
     try{
       jalaliToGregorianDate(selected);
       setParts({year:String(year),month:two(month),day:two(day)});
-      setVisible({year,month});emit(selected);setError('');setOpen(false);
+      setVisible({year:clampYear(year),month});emit(selected);setError('');setOpen(false);
     }catch(e){setError(e.message);}
   }
   function navigate(offset){
     setVisible(previous=>{
       const monthIndex=(previous.year*12+previous.month-1)+offset;
-      return {year:Math.floor(monthIndex/12),month:monthIndex%12+1};
+      const nextYear=Math.floor(monthIndex/12);
+      const nextMonth=monthIndex%12+1;
+      if(nextYear<MIN_JALALI_YEAR)return {year:MIN_JALALI_YEAR,month:1};
+      if(nextYear>MAX_JALALI_YEAR)return {year:MAX_JALALI_YEAR,month:12};
+      return {year:nextYear,month:nextMonth};
     });
   }
   const offset=firstWeekdayOfJalaliMonth(visible.year,visible.month);
@@ -92,18 +98,18 @@ export default function JalaliDateInput({label,value='',onChange,id}){
       <select aria-label={`${label}: روز`} value={parts.day} onChange={event=>changeParts('day',event.target.value)}>
         <option value="">روز</option>{Array.from({length:maxDay},(_,index)=>index+1).map(day=><option key={day} value={two(day)}>{day.toLocaleString('fa-IR',{useGrouping:false})}</option>)}
       </select>
-      <button type="button" className="jalali-calendar-trigger ghost" aria-label={`باز کردن تقویم ${label}`} aria-expanded={open} onClick={()=>{if(!open){setVisible({year:Number(parts.year||current.year),month:Number(parts.month||current.month)});}setOpen(!open)}}>🗓</button>
+      <button type="button" className="jalali-calendar-trigger ghost" aria-label={`باز کردن تقویم ${label}`} aria-expanded={open} onClick={()=>{if(!open){setVisible({year:clampYear(parts.year||current.year),month:Number(parts.month||current.month)});}setOpen(!open)}}>🗓</button>
     </div>
     {value&&<small className="date-help" dir="rtl">تاریخ انتخابی: {normalizeDigits(value).replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)])}</small>}
     {error&&<small className="field-error" role="alert">{error}</small>}
     {open&&<div className="jalali-calendar" role="group" aria-label={`تقویم شمسی ${label}`}>
-      <div className="jalali-calendar-header"><button type="button" className="ghost" onClick={()=>navigate(-1)} aria-label="ماه قبل">‹</button><b>{months[visible.month-1]} {visible.year.toLocaleString('fa-IR',{useGrouping:false})}</b><button type="button" className="ghost" onClick={()=>navigate(1)} aria-label="ماه بعد">›</button></div>
+      <div className="jalali-calendar-header"><button type="button" className="ghost" onClick={()=>navigate(-1)} aria-label="ماه قبل" disabled={visible.year===MIN_JALALI_YEAR&&visible.month===1}>‹</button><b>{months[visible.month-1]} {visible.year.toLocaleString('fa-IR',{useGrouping:false})}</b><button type="button" className="ghost" onClick={()=>navigate(1)} aria-label="ماه بعد" disabled={visible.year===MAX_JALALI_YEAR&&visible.month===12}>›</button></div>
       <div className="jalali-calendar-days">{weekdays.map((day,index)=><strong key={index}>{day}</strong>)}
         {Array.from({length:offset},(_,index)=><span key={`empty-${index}`}/>)}
         {Array.from({length:calendarDays},(_,index)=>index+1).map(day=><button type="button" key={day}
           className={Number(parts.year)===visible.year&&Number(parts.month)===visible.month&&selectedDay===day?'selected-date':''}
           aria-label={`${day} ${months[visible.month-1]} ${visible.year}`} onClick={()=>chooseDay(visible.year,visible.month,day)}>{day.toLocaleString('fa-IR',{useGrouping:false})}</button>)}
-      </div><div className="jalali-calendar-footer"><button type="button" className="ghost" onClick={()=>chooseDay(Number(current.year),Number(current.month),Number(current.day))}>امروز</button><button type="button" className="ghost" onClick={()=>{setParts({year:'',month:'',day:''});emit('');setOpen(false);}}>پاک کردن تاریخ</button><button type="button" className="ghost" onClick={()=>setOpen(false)}>بستن</button></div>
+      </div><div className="jalali-calendar-footer"><button type="button" className="ghost" onClick={()=>chooseDay(currentYear,Number(current.month),Number(current.day))}>امروز</button><button type="button" className="ghost" onClick={()=>{setParts({year:'',month:'',day:''});emit('');setOpen(false);}}>پاک کردن تاریخ</button><button type="button" className="ghost" onClick={()=>setOpen(false)}>بستن</button></div>
     </div>}
   </div>;
 }

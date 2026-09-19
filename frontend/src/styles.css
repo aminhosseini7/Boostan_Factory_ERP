@@ -67,3 +67,8 @@
 :root[data-theme="dark"] .jalali-calendar-days button:hover,:root[data-theme="dark"] .jalali-calendar-days .selected-date{background:#1769aa;color:#fff}
 :root[data-theme="dark"] .jalali-date-label,:root[data-theme="dark"] .sale-line .sale-item-number,:root[data-theme="dark"] .sale-item-count{color:#cbd5e1}
 @media(max-width:650px){.sale-line{grid-template-columns:1fr}.sale-line .sale-item-number{margin-top:7px}.jalali-date-field{width:100%;min-width:0}.jalali-calendar{right:0}}
+
+/* v2.8: compact sales form and bounded Jalali years. */
+.add-sale-item-btn{width:36px;min-width:36px;height:36px;min-height:36px;padding:0!important;border-radius:50%;font-size:22px;line-height:1;font-weight:700;display:inline-grid;place-items:center;justify-self:end}
+.driver-section{display:grid;gap:8px}.driver-toggle{width:max-content;min-height:36px;padding:7px 12px!important;font-size:13px}.driver-box{margin-top:0}
+@media(max-width:650px){.add-sale-item-btn{justify-self:start}.driver-toggle{width:100%}}
