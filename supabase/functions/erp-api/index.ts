@@ -179,14 +179,17 @@ async function customers(req: Request, path: string, method: string, user: AppUs
   }
   if (method === 'POST' && path === '/customers') {
     const b = await body(req); const name = String(b.name || '').trim(); if (!name) return fail('نام مشتری الزامی است')
-    const phone = String(b.phone || '').trim() || null
+    const phone = normalizeDigits(String(b.phone || '').trim()) || null
+    if(phone&&!/^\d{11}$/.test(phone))return fail('شماره تماس مشتری باید ۱۱ رقم باشد')
     const { data, error } = await db.from('customers').insert({ name, phone, address: String(b.address || '').trim() || null }).select().single(); if (error) throw error
     await db.from('activity_logs').insert({ user_id: user.id, action: 'CREATE_CUSTOMER', entity_type: 'CUSTOMER', entity_id: data.id, details: { name } })
     return json(mapCustomer(data), 201)
   }
   if (method === 'PUT' && id) {
     manager(user); const b = await body(req)
-    const { data, error } = await db.from('customers').update({ name: String(b.name || '').trim(), phone: String(b.phone || '').trim() || null, address: String(b.address || '').trim() || null, updated_at: new Date().toISOString() }).eq('id', id).select().maybeSingle(); if (error) throw error
+    const customerPhone = normalizeDigits(String(b.phone || '').trim()) || null
+    if(customerPhone&&!/^\d{11}$/.test(customerPhone))return fail('شماره تماس مشتری باید ۱۱ رقم باشد')
+    const { data, error } = await db.from('customers').update({ name: String(b.name || '').trim(), phone: customerPhone, address: String(b.address || '').trim() || null, updated_at: new Date().toISOString() }).eq('id', id).select().maybeSingle(); if (error) throw error
     if (!data) return fail('مشتری پیدا نشد', 404)
     return json(mapCustomer(data))
   }
@@ -247,7 +250,10 @@ async function sales(req: Request, path: string, method: string, user: AppUser) 
   }
   if (method === 'POST' && path === '/sales') {
     const b = await body(req)
-    const { data, error } = await db.rpc('boostan_create_sale', { p_payload: b, p_actor: user.id }); if (error) throw error
+    const driverPhone = normalizeDigits(String(b.driverPhone || '').trim())
+    if(driverPhone&&!/^\d{11}$/.test(driverPhone))return fail('شماره تماس راننده باید ۱۱ رقم باشد')
+    if(b.driverVehicle&& !/^\d{2} [آ-ی] \d{3} - \d{2}$/.test(normalizeDigits(String(b.driverVehicle)).replace(/[ي]/g,'ی').replace(/[ك]/g,'ک')))return fail('فرمت پلاک ایران معتبر نیست')
+    const { data, error } = await db.rpc('boostan_create_sale', { p_payload: {...b,driverPhone,driverVehicle: b.driverVehicle?normalizeDigits(String(b.driverVehicle)).replace(/[ي]/g,'ی').replace(/[ك]/g,'ک'):null}, p_actor: user.id }); if (error) throw error
     return json(data, 201)
   }
   return null
