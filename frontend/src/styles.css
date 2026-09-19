@@ -28,3 +28,16 @@
 .brand-login span{font-size:13px;color:#475569;opacity:1}
 :root[data-theme="dark"] .brand-login span{color:#cbd5e1}
 @media(max-width:650px){.brand-sidebar .brand-logo{max-width:148px}.brand-sidebar{margin-bottom:10px}.brand-login .brand-logo{width:min(100%,270px)}}
+
+/* Production-ready compact branding and readable date filters. */
+.brand-sidebar .brand-logo{max-width:156px}
+.brand-login .brand-logo{border-radius:18px}
+.jalali-date-field{width:190px;max-width:100%;min-width:0;gap:3px}
+.jalali-date-field input{width:100%;min-width:0;text-align:center;direction:ltr;letter-spacing:.4px}
+.jalali-date-field .date-help{font-size:11px;color:#64748b;line-height:1.35}
+.jalali-date-field input[aria-invalid="true"],.field-invalid{border:2px solid #b91c1c!important;outline-color:#b91c1c}
+.field-error{display:block;color:#b91c1c;font-size:12px;line-height:1.6;margin:3px 0}
+.sale-line-error{grid-column:1/-1}
+.new-customer-confirm{font-size:13px;color:#166534;background:#ecfdf5;border-radius:8px;padding:8px}
+.sale-form-error{margin-top:6px}
+@media(max-width:650px){.brand-sidebar .brand-logo{max-width:122px}.jalali-date-field{width:100%}}

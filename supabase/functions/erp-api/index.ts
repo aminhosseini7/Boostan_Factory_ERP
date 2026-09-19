@@ -158,7 +158,10 @@ async function customers(req: Request, path: string, method: string, user: AppUs
     let query = db.from('customers').select('*').order('is_active', { ascending: false }).order('name')
     if (q) query = query.or(`name.ilike.%${q.replaceAll(',', '')}%,phone.ilike.%${q.replaceAll(',', '')}%`)
     const { data, error } = await query; if (error) throw error
-    return json((data || []).map(mapCustomer))
+    if (user.role !== 'MANAGER') return json((data || []).map(mapCustomer))
+    const {data: balances,error:balanceError}=await db.from('v_customer_balances').select('customer_id,balance');if(balanceError)throw balanceError
+    const balanceMap=new Map((balances||[]).map((x:any)=>[x.customer_id,n(x.balance)]))
+    return json((data || []).map(x=>({...mapCustomer(x),balance:balanceMap.get(x.id)||0})).sort((a,b)=>b.balance-a.balance||a.name.localeCompare(b.name,'fa')))
   }
   if (method === 'GET' && statementId) {
     manager(user)
