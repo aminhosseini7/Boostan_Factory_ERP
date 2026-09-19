@@ -2,11 +2,17 @@
   "name": "boostan-factory-erp",
   "version": "1.0.0-rc.1",
   "private": true,
-  "workspaces": ["backend", "frontend"],
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
   "scripts": {
     "test": "npm --workspace backend test",
     "build": "npm --workspace frontend run build",
     "dev:backend": "npm --workspace backend run dev",
     "dev:frontend": "npm --workspace frontend run dev"
+  },
+  "devDependencies": {
+    "supabase": "^2.117.0"
   }
 }

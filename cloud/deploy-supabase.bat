@@ -28,8 +28,8 @@ call npx supabase link --project-ref %BOOSTAN_PROJECT_REF%
 if errorlevel 1 goto :fail
 
 echo.
-echo Applying the cloud database schema.
-echo IMPORTANT: this resets the current ERP test tables.
+echo Applying pending cloud database migrations.
+echo Existing v2.1 data is preserved; only the first historical migration was destructive.
 call npx supabase db push --include-all
 if errorlevel 1 goto :fail
 
