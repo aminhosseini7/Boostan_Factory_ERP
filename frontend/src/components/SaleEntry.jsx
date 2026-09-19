@@ -5,7 +5,8 @@ import {formatToman,normalizeDigits,toNumber} from '../utils/fa';
 import NumericInput from './NumericInput';
 import IranPlateInput, {plateToString,isCompletePlate} from './IranPlateInput';
 
-const firstItem=()=>({id:'item-0',productId:'',quantity:''});
+const uniqueRowId=()=>globalThis.crypto?.randomUUID?.()||`row-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const firstItem=()=>({id:uniqueRowId(),productId:'',quantity:''});
 const blankSale=()=>({customerId:'',paymentType:'CASH',paymentAmount:'',paymentMethod:'CARD',customerPayableAmount:'',driverName:'',driverPhone:'',note:'',items:[firstItem()]});
 const blankPlate=()=>({first:'',letter:'',middle:'',city:''});
 const cleanPhone=v=>normalizeDigits(v).replace(/\D/g,'').slice(0,11);
@@ -29,7 +30,8 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
   const [manualTotal,setManualTotal]=useState(false);
   const [plateParts,setPlateParts]=useState(blankPlate);
   const [errors,setErrors]=useState({});
-  const submitting=useRef(false),creating=useRef(false),lastAdd=useRef(0),nextId=useRef(1);
+  const submitting=useRef(false),creating=useRef(false),lastAdd=useRef(0);
+  const [lineNotice,setLineNotice]=useState('');
   const isCredit=sale.paymentType==='CREDIT';
   const subtotal=useMemo(()=>sale.items.reduce((sum,it)=>{
     const p=products.find(x=>x.id===it.productId);
@@ -42,11 +44,12 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
   function changeItem(id,key,val){setSale(v=>({...v,items:v.items.map(x=>x.id===id?{...x,[key]:val}:x)}));clearError('items')}
   function addItem(){
     // A double-tap must never create two lines. Stable IDs prevent one delete removing two lines.
-    const now=Date.now();if(now-lastAdd.current<450)return;lastAdd.current=now;
-    const id=`item-${nextId.current++}`;
+    const now=Date.now();if(now-lastAdd.current<700)return;lastAdd.current=now;
+    const id=uniqueRowId();
     setSale(v=>({...v,items:appendSaleItem(v.items,id)}));
+    setLineNotice('یک قلم جدید به فروش اضافه شد.');
   }
-  function removeItem(id){setSale(v=>({...v,items:removeSaleItem(v.items,id)}));clearError('items')}
+  function removeItem(id){setSale(v=>({...v,items:removeSaleItem(v.items,id)}));setLineNotice('یک قلم از فروش حذف شد.');clearError('items')}
   function setCustomerField(field,value){if(sale.customerId)setSale(v=>({...v,customerId:''}));setSavedCustomerId('');setNewCustomer(v=>({...v,[field]:value}));clearError(field==='phone'?'customerPhone':'customerName')}
   async function createCustomer(){
     if(creating.current)return;
@@ -90,7 +93,7 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
         note:sale.note.trim()||undefined,items:sale.items.map(x=>({productId:x.productId,quantity:toNumber(x.quantity)}))};
       await api.post('/sales',payload);
       setSale(blankSale());setNewCustomer({name:'',phone:'',address:''});setSavedCustomerId('');
-      setPlateParts(blankPlate());setManualTotal(false);nextId.current=1;lastAdd.current=0;
+      setPlateParts(blankPlate());setManualTotal(false);lastAdd.current=0;setLineNotice('');
       setOk?.('فروش ثبت شد؛ تاریخ و ساعت توسط سیستم ذخیره شد.');
       try{await onSaved?.()}catch(_){setOk?.('فروش ثبت شد اما فهرست تازه‌سازی نشد؛ صفحه را دوباره باز کنید.')}
     }catch(e){const msg=e?.response?.data?.message||e.message||'ثبت فروش انجام نشد';setErrors(v=>({...v,[detectServerField(msg)]:msg}))}
@@ -104,9 +107,10 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
       <div className="form-grid"><label>پیش‌پرداخت (اختیاری، تومان)<NumericInput value={sale.paymentAmount} inputMode="numeric" className={errors.paymentAmount?'field-invalid':''} onChange={e=>{setSale(v=>({...v,paymentAmount:e.target.value}));clearError('paymentAmount')}}/>{showError(errors,'paymentAmount')}</label>{toNumber(sale.paymentAmount)>0&&<label>روش پیش‌پرداخت<select value={sale.paymentMethod} onChange={e=>setSale(v=>({...v,paymentMethod:e.target.value}))}><option value="CASH">نقدی</option><option value="CARD">کارت</option><option value="BANK_TRANSFER">انتقال بانکی</option><option value="CHECK">چک</option><option value="OTHER">سایر</option></select></label>}<div className="debt-preview">مانده نسیه پس از ثبت: <b>{formatToman(Math.max(0,finalTotal-toNumber(sale.paymentAmount)))}</b></div></div>
     </div>}
     <h4>اقلام فروش</h4>
-    {sale.items.map((it,i)=><div className="sale-line" key={it.id}><select value={it.productId} aria-label={`محصول قلم ${i+1}`} className={errors.items?'field-invalid':''} onChange={e=>changeItem(it.id,'productId',e.target.value)}><option value="">انتخاب محصول</option>{products.map(x=><option key={x.id} value={x.id}>{x.name} — {formatToman(x.price)}</option>)}</select><NumericInput aria-label={`تعداد قلم ${i+1}`} inputMode="numeric" placeholder="تعداد" value={it.quantity} className={errors.items?'field-invalid':''} onChange={e=>changeItem(it.id,'quantity',e.target.value)}/>{sale.items.length>1&&<button type="button" className="small danger" onClick={()=>removeItem(it.id)}>حذف همین قلم</button>}</div>)}
+    {sale.items.map((it,i)=><div className="sale-line" key={it.id}><span className="sale-item-number">قلم {i+1}</span><select value={it.productId} aria-label={`محصول قلم ${i+1}`} className={errors.items?'field-invalid':''} onChange={e=>changeItem(it.id,'productId',e.target.value)}><option value="">انتخاب محصول</option>{products.map(x=><option key={x.id} value={x.id}>{x.name} — {formatToman(x.price)}</option>)}</select><NumericInput aria-label={`تعداد قلم ${i+1}`} inputMode="numeric" placeholder="تعداد" value={it.quantity} className={errors.items?'field-invalid':''} onChange={e=>changeItem(it.id,'quantity',e.target.value)}/>{sale.items.length>1&&<button type="button" className="small danger" onClick={()=>removeItem(it.id)}>حذف همین قلم</button>}</div>)}
     {showError(errors,'items')}
     <button type="button" className="ghost" onClick={addItem}>افزودن یک قلم دیگر</button>
+    <small className="sale-item-count" role="status">تعداد اقلام فروش: {sale.items.length}{lineNotice?` — ${lineNotice}`:''}</small>
     <div className="sale-total"><div>مبلغ محاسبه‌شده: <b>{formatToman(subtotal)}</b></div><label>مبلغ نهایی فروش به مشتری (تومان)<NumericInput inputMode="numeric" value={sale.customerPayableAmount} className={errors.customerPayableAmount?'field-invalid':''} onChange={e=>{setManualTotal(true);setSale(v=>({...v,customerPayableAmount:e.target.value}));clearError('customerPayableAmount')}}/>{showError(errors,'customerPayableAmount')}</label><div>تخفیف محاسبه‌شده: <b>{formatToman(discount)}</b></div></div>
     <div className="driver-box"><h4>اطلاعات راننده (اختیاری)</h4><div className="form-grid"><label>نام راننده<input value={sale.driverName} onChange={e=>setSale(v=>({...v,driverName:e.target.value}))}/></label><label>شماره تماس راننده<input inputMode="numeric" maxLength={11} dir="ltr" className={errors.driverPhone?'field-invalid':''} placeholder="شماره تماس ۱۱ رقمی" value={sale.driverPhone} onChange={e=>{setSale(v=>({...v,driverPhone:cleanPhone(e.target.value)}));clearError('driverPhone')}}/>{showError(errors,'driverPhone')}</label><div className="plate-field-label"><span>پلاک خودرو (اختیاری)</span><IranPlateInput value={plateParts} onChange={v=>{setPlateParts(v);clearError('plate')}}/>{showError(errors,'plate')}</div></div></div>
     <label>توضیحات<textarea value={sale.note} onChange={e=>setSale(v=>({...v,note:e.target.value}))}/></label>

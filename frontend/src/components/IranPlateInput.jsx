@@ -1,35 +1,79 @@
-import {useEffect,useRef,useState} from 'react';
+import {useRef} from 'react';
 import {normalizeDigits} from '../utils/fa';
 
 const fields=['first','letter','middle','city'];
 const widths=[2,1,3,2];
 const empty={first:'',letter:'',middle:'',city:''};
-const persianPlateLetters='آابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی';
-const latinToPersian=s=>normalizeDigits(s).replace(/[ي]/g,'ی').replace(/[ك]/g,'ک');
+// Restrict letters to those used on ordinary Iranian private/passenger plates.
+const allowedLetters='ابپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی';
+function normalizeText(value){return normalizeDigits(value??'').replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/\u200c/g,'').trim()}
 export function normalizePlateSegment(index,input){
-  const text=latinToPersian(input);
-  if(index===1)return [...text].filter(x=>persianPlateLetters.includes(x)).slice(-1).join('');
-  return text.replace(/\D/g,'').slice(0,widths[index]);
+  const text=normalizeText(input);
+  if(index===1)return [...text].filter(char=>allowedLetters.includes(char)).slice(-1).join('');
+  return text.replace(/[^0-9]/g,'').slice(0,widths[index]);
 }
-export function isCompletePlate(p){return fields.every((key,i)=>normalizePlateSegment(i,p?.[key]||'').length===widths[i]);}
-export function plateToString(p){return fields.every(k=>!p?.[k])?'':`${normalizePlateSegment(0,p.first)} ${normalizePlateSegment(1,p.letter)} ${normalizePlateSegment(2,p.middle)} - ${normalizePlateSegment(3,p.city)}`.trim();}
+export function isCompletePlate(plate){return fields.every((field,index)=>normalizePlateSegment(index,plate?.[field]||'').length===widths[index]);}
+export function plateToString(plate){
+  if(fields.every(field=>!plate?.[field]))return '';
+  return `${normalizePlateSegment(0,plate?.first)} ${normalizePlateSegment(1,plate?.letter)} ${normalizePlateSegment(2,plate?.middle)} - ${normalizePlateSegment(3,plate?.city)}`.trim();
+}
 
 export default function IranPlateInput({value=empty,onChange}){
-  const refs=useRef([]);const [pending,setPending]=useState(null);
-  useEffect(()=>{if(pending!==null){refs.current[pending]?.focus();setPending(null)}},[pending,value]);
-  function update(i,input){
-    const next=normalizePlateSegment(i,input);
-    const old=value[fields[i]]||'';
-    onChange({...value,[fields[i]]:next});
-    if(i<3&&next.length===widths[i]&&old!==next)setPending(i+1);
+  const refs=useRef([]);
+  // IME/composition events can arrive before React has painted the preceding update.
+  // Merge each field into the latest draft, NEVER a stale captured `value` object.
+  const latest=useRef(value);
+  const composing=useRef(false);
+  const scheduledFocus=useRef(null);
+  const lastProp=useRef(value);
+  if(value!==lastProp.current){latest.current=value;lastProp.current=value;}
+
+  function focusNext(index){
+    if(index>=3)return;
+    // Queue focus after the new controlled value is committed (particularly on mobile).
+    if(scheduledFocus.current!==null)cancelAnimationFrame(scheduledFocus.current);
+    scheduledFocus.current=requestAnimationFrame(()=>{
+      refs.current[index+1]?.focus();
+      scheduledFocus.current=null;
+    });
   }
-  function back(e,i){if(e.key==='Backspace'&&!value[fields[i]]&&i>0)refs.current[i-1]?.focus()}
-  function field(i,label,placeholder,extra=''){
-    return <input key={fields[i]} ref={el=>{refs.current[i]=el}} aria-label={label} placeholder={placeholder}
-      className={extra} dir={i===1?'rtl':'ltr'} type="text" inputMode={i===1?'text':'numeric'}
-      maxLength={widths[i]} value={value[fields[i]]||''} autoComplete="off"
-      onChange={e=>update(i,e.target.value)} onCompositionEnd={e=>update(i,e.currentTarget.value)}
-      onKeyDown={e=>back(e,i)}/>;
+  function update(index,raw,moveFocus=true){
+    const field=fields[index];
+    const normalized=normalizePlateSegment(index,raw);
+    const prev=latest.current[field]||'';
+    if(prev!==normalized){
+      const next={...latest.current,[field]:normalized};
+      latest.current=next;
+      onChange?.(next);
+    }
+    if(moveFocus&&index<3&&normalized.length===widths[index]&&prev!==normalized)focusNext(index);
+  }
+  function onInput(index,event){
+    if(composing.current||event.nativeEvent?.isComposing)return;
+    update(index,event.currentTarget.value);
+  }
+  function onChangeField(index,event){
+    if(composing.current||event.nativeEvent?.isComposing)return;
+    update(index,event.currentTarget.value);
+  }
+  function onCompositionEnd(index,event){
+    composing.current=false;
+    update(index,event.currentTarget.value);
+  }
+  function onKeyDown(index,event){
+    if(event.key==='Backspace'&&!latest.current[fields[index]]&&index>0){
+      refs.current[index-1]?.focus();
+    }
+  }
+  function field(index,label,placeholder,extra=''){
+    return <input key={fields[index]} ref={element=>{refs.current[index]=element}} aria-label={label}
+      placeholder={placeholder} className={extra} dir={index===1?'rtl':'ltr'} type="text"
+      inputMode={index===1?'text':'numeric'} maxLength={index===1?undefined:widths[index]}
+      value={value?.[fields[index]]||''} autoComplete="off" autoCorrect="off" spellCheck={false}
+      onInput={event=>onInput(index,event)} onChange={event=>onChangeField(index,event)}
+      onCompositionStart={()=>{composing.current=true}}
+      onCompositionEnd={event=>onCompositionEnd(index,event)}
+      onKeyDown={event=>onKeyDown(index,event)}/>;
   }
   return <div className="iran-plate" role="group" aria-label="پلاک خودرو با قالب ایرانی">
     {field(0,'دو رقم اول پلاک','۱۶')}
