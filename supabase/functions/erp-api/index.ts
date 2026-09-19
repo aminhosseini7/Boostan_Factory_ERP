@@ -74,7 +74,8 @@ async function body(req: Request) {
   try { return await req.json() } catch (_) { return {} }
 }
 
-function n(v: any) { return Number(v || 0) }
+function normalizeDigits(v:any){return String(v??'').replace(/[۰-۹]/g,(d)=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d))).replace(/[٠-٩]/g,(d)=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d))).replace(/[٬,]/g,'').replace(/٫/g,'.')}
+function n(v: any) { const x=Number(normalizeDigits(v)); return Number.isFinite(x)?x:0 }
 
 function mapProduct(x: any) {
   return { id: x.id, code: x.code, name: x.name, unit: x.unit, price: n(x.price), weightKg: n(x.weight_kg), minimumStock: n(x.minimum_stock), isActive: x.is_active, createdAt: x.created_at, updatedAt: x.updated_at }
@@ -553,7 +554,7 @@ async function handler(req: Request) {
   const url = new URL(req.url), path = normalizePath(url.pathname), method = req.method.toUpperCase()
   if (method === 'GET' && path === '/health') {
     const { error } = await db.from('factory_settings').select('key').limit(1)
-    return error ? fail('Database connection failed', 503, error.message) : json({ project: 'Boostan Factory ERP', version: '2.2-cloud', status: 'running', database: 'connected', time: new Date().toISOString() })
+    return error ? fail('ارتباط با پایگاه داده برقرار نشد', 503, error.message) : json({ project: 'سامانه مدیریت کارخانه بوستان', version: '2.3-cloud', status: 'فعال', database: 'متصل', time: new Date().toISOString() })
   }
   if (method === 'POST' && path === '/auth/login') return login(req)
 
@@ -579,7 +580,7 @@ export default {
     try { return await handler(req) }
     catch (e: any) {
       console.error(e)
-      const msg = String(e?.message || 'Unexpected server error')
+      const raw = String(e?.message || 'خطای غیرمنتظره در سرور'); const translations:any={ 'Authentication required':'برای ادامه وارد حساب کاربری شوید','Session expired or invalid':'نشست شما منقضی شده است؛ دوباره وارد شوید','User is inactive':'حساب کاربری غیرفعال است','Manager access required':'این بخش فقط برای مدیر قابل دسترسی است','Insufficient stock':'موجودی ثبت‌شده کافی نیست','Grindable scrap stock is insufficient. Correct material inventory first.':'موجودی ثبت‌شده ضایعات کافی نیست'}; const msg = translations[raw] || raw
       const status = Number(e?.status || (msg.toLowerCase().includes('duplicate') ? 409 : 400))
       return fail(msg, status)
     }

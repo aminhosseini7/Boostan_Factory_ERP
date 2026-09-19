@@ -34,13 +34,15 @@ call npx supabase db push --include-all
 if errorlevel 1 goto :fail
 
 echo.
-echo Generating a strong random JWT secret locally...
-for /f "delims=" %%A in ('powershell -NoProfile -Command "$b=New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Fill($b); [Convert]::ToBase64String($b)"') do set "BOOSTAN_JWT_SECRET=%%A"
-if "%BOOSTAN_JWT_SECRET%"=="" goto :fail
-
-echo Setting the Edge Function secret...
-call npx supabase secrets set BOOSTAN_JWT_SECRET="%BOOSTAN_JWT_SECRET%" --project-ref %BOOSTAN_PROJECT_REF%
-if errorlevel 1 goto :fail
+echo Keeping the existing ERP login secret unchanged.
+echo To rotate it intentionally, set BOOSTAN_ROTATE_JWT=1 before running this script.
+if "%BOOSTAN_ROTATE_JWT%"=="1" (
+  echo Generating and setting a new ERP login secret...
+  for /f "delims=" %%A in ('powershell -NoProfile -Command "$b=New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Fill($b); [Convert]::ToBase64String($b)"') do set "BOOSTAN_JWT_SECRET=%%A"
+  if "%BOOSTAN_JWT_SECRET%"=="" goto :fail
+  call npx supabase secrets set BOOSTAN_JWT_SECRET="%BOOSTAN_JWT_SECRET%" --project-ref %BOOSTAN_PROJECT_REF%
+  if errorlevel 1 goto :fail
+)
 
 echo.
 echo Deploying ERP API...

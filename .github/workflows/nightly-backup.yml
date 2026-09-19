@@ -1,0 +1,30 @@
+name: پشتیبان شبانه پایگاه داده
+
+on:
+  schedule:
+    - cron: '30 23 * * *' # 03:00 Tehran (UTC+3:30)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: نصب ابزار PostgreSQL
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: تهیه نسخه پشتیبان
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          test -n "$SUPABASE_DB_URL" || (echo "SUPABASE_DB_URL secret is missing" && exit 1)
+          mkdir -p backup
+          pg_dump "$SUPABASE_DB_URL" --format=custom --no-owner --no-privileges --file="backup/boostan-$(date -u +%Y%m%d-%H%M%S).dump"
+      - name: نگهداری فایل پشتیبان
+        uses: actions/upload-artifact@v4
+        with:
+          name: boostan-db-backup-${{ github.run_number }}
+          path: backup/*.dump
+          retention-days: 30
+          if-no-files-found: error
