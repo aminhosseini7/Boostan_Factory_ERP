@@ -158,10 +158,10 @@ async function customers(req: Request, path: string, method: string, user: AppUs
     let query = db.from('customers').select('*').order('is_active', { ascending: false }).order('name')
     if (q) query = query.or(`name.ilike.%${q.replaceAll(',', '')}%,phone.ilike.%${q.replaceAll(',', '')}%`)
     const { data, error } = await query; if (error) throw error
-    if (user.role !== 'MANAGER') return json((data || []).map(mapCustomer))
     const {data: balances,error:balanceError}=await db.from('v_customer_balances').select('customer_id,balance');if(balanceError)throw balanceError
     const balanceMap=new Map((balances||[]).map((x:any)=>[x.customer_id,n(x.balance)]))
-    return json((data || []).map(x=>({...mapCustomer(x),balance:balanceMap.get(x.id)||0})).sort((a,b)=>b.balance-a.balance||a.name.localeCompare(b.name,'fa')))
+    const mapped=(data||[]).map(x=>({...mapCustomer(x),balance:balanceMap.get(x.id)||0,hasDebt:(balanceMap.get(x.id)||0)>0})).sort((a,b)=>b.balance-a.balance||a.name.localeCompare(b.name,'fa'))
+    return json(user.role==='MANAGER'?mapped:mapped.map(({balance,...rest})=>rest))
   }
   if (method === 'GET' && statementId) {
     manager(user)
@@ -231,13 +231,32 @@ async function production(req: Request, path: string, method: string, user: AppU
   return null
 }
 
-async function sales(req: Request, path: string, method: string, user: AppUser) {
+async function sales(req: Request, path: string, method: string, user: AppUser, url: URL) {
   const id = path.match(/^\/sales\/([0-9a-f-]+)$/i)?.[1]
   if (method === 'GET' && path === '/sales') {
-    let q = db.from('v_sales_summary').select('*').order('sold_at', { ascending: false }).limit(500)
-    if (user.role !== 'MANAGER') q = q.eq('operator_id', user.id)
-    const { data, error } = await q; if (error) throw error
-    return json((data || []).map(mapSale))
+    // Server-side filters allow finding an older invoice for a return without
+    // loading every sale into a mobile browser. 'since' is used only for the
+    // manager's recent sales panel; return search deliberately omits it.
+    const since=url.searchParams.get('since'),from=url.searchParams.get('from'),to=url.searchParams.get('to')
+    const search=normalizeDigits(url.searchParams.get('q')||'').trim()
+    let q=db.from('v_sales_summary').select('*').order('sold_at',{ascending:false}).limit(150)
+    if(user.role!=='MANAGER')q=q.eq('operator_id',user.id)
+    if(since){if(!Number.isFinite(Date.parse(since)))return fail('زمان شروع جستجو معتبر نیست');q=q.gte('sold_at',new Date(since).toISOString())}
+    if(from){if(!/^\d{4}-\d{2}-\d{2}$/.test(from))return fail('تاریخ شروع جستجو معتبر نیست');q=q.gte('sold_at',`${from}T00:00:00+03:30`)}
+    if(to){if(!/^\d{4}-\d{2}-\d{2}$/.test(to))return fail('تاریخ پایان جستجو معتبر نیست');q=q.lte('sold_at',`${to}T23:59:59+03:30`)}
+    if(search){
+      const safe=search.replace(/[,().%*]/g,'').slice(0,80)
+      if(!safe)return json([])
+      if(/^\d{7,11}$/.test(safe)){
+        const {data:matches,error:ec}=await db.from('customers').select('id').ilike('phone',`%${safe}%`).limit(150)
+        if(ec)throw ec
+        if(!matches?.length)return json([])
+        q=q.in('customer_id',matches.map(x=>x.id))
+      }else if(/^[0-9a-f-]{36}$/i.test(safe))q=q.eq('id',safe)
+      else q=q.ilike('customer_name',`%${safe}%`)
+    }
+    const {data,error}=await q;if(error)throw error
+    return json((data||[]).map(mapSale))
   }
   if (method === 'GET' && id) {
     let q = db.from('v_sales_summary').select('*').eq('id', id)
@@ -332,7 +351,13 @@ async function operations(req: Request, path: string, method: string, user: AppU
     return json((data || []).map(x => ({ id:x.id,purchaseType:x.purchase_type,supplierName:x.supplier_name,itemName:x.item_name,productId:x.product_id,materialId:x.inventory_material_id,quantity:n(x.quantity),weightKg:n(x.weight_kg),unit:x.unit,unitPrice:n(x.unit_price),totalAmount:n(x.total_amount),purchasedAt:x.purchased_at,note:x.note })))
   }
   if (method === 'POST' && path === '/purchases') {
-    const b=await body(req); const { data,error }=await db.rpc('boostan_create_purchase',{p_payload:b,p_actor:user.id}); if(error)throw error; return json(data,201)
+    const b=await body(req)
+    // The database routine maps RAW_MATERIAL to RAW-READY and USED_SCRAP/OTHER
+    // to SCRAP-GRIND; FINISHED_PRODUCT goes to its selected product's warehouse.
+    // Ignore any older client-provided manual destination to prevent misrouting.
+    const {materialId:_ignored,...payload}=b
+    const {data,error}=await db.rpc('boostan_create_purchase',{p_payload:payload,p_actor:user.id});if(error)throw error
+    return json(data,201)
   }
   if (method === 'GET' && path === '/grinding') {
     const { data,error }=await db.from('grinding_records').select('*').order('ground_at',{ascending:false}).limit(500);if(error)throw error
@@ -460,13 +485,14 @@ async function users(req: Request, path: string, method: string, user: AppUser) 
 async function dashboard(user: AppUser) {
   manager(user)
   const since = new Date(Date.now() - 30 * 86400000).toISOString()
+  const recentSince=new Date(Date.now()-50*60*60*1000).toISOString()
   const todayTehran = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
   const monthStart=new Date();monthStart.setUTCDate(1);monthStart.setUTCHours(0,0,0,0)
   const [{data:prod,error:ep},{data:salesData,error:es},{data:inv,error:ei},{data:materialsData,error:em},{data:debt,error:ed},{data:acts,error:ea},{data:fin,error:ef}] = await Promise.all([
     db.from('v_production_summary').select('quantity,gross_quantity,defects,production_at').gte('production_at', since),
     db.from('v_sales_summary').select('subtotal,net_total,total_amount,sold_at').gte('sold_at', since),
     db.from('v_inventory_stock').select('*'),db.from('v_material_stock').select('*'),db.from('v_customer_balances').select('balance'),
-    db.from('activity_logs').select('id,action,created_at,user_id,users(full_name)').order('created_at',{ascending:false}).limit(20),
+    db.from('activity_logs').select('id,action,created_at,user_id,users(full_name)').gte('created_at',recentSince).order('created_at',{ascending:false}).limit(500),
     db.from('financial_entries').select('direction,amount,cash_effect,occurred_at').eq('cash_effect',true).gte('occurred_at',monthStart.toISOString()).limit(3000),
   ])
   if(ep||es||ei||em||ed||ea||ef)throw ep||es||ei||em||ed||ea||ef
@@ -497,20 +523,26 @@ async function reports(path: string, user: AppUser, url: URL) {
   const m = path.match(/^\/reports\/([^/]+)(?:\/export\/csv)?$/)
   if (!m) return null
   const type = m[1], from = url.searchParams.get('from'), to = url.searchParams.get('to')
+  const productId=url.searchParams.get('productId')
+  if(productId&&!/^[0-9a-f-]{36}$/i.test(productId))return fail('شناسه محصول معتبر نیست')
   const fromIso = from ? `${from}T00:00:00+03:30` : new Date(Date.now() - 30 * 86400000).toISOString()
   const toIso = to ? `${to}T23:59:59+03:30` : new Date().toISOString()
   let rows: any[] = []
   if (type === 'production' || type === 'production-monthly' || type === 'operators') {
-    const { data, error } = await db.from('v_production_summary').select('*').gte('production_at', fromIso).lte('production_at', toIso); if (error) throw error
+    let query=db.from('v_production_summary').select('*').gte('production_at',fromIso).lte('production_at',toIso)
+    if(productId)query=query.eq('product_id',productId)
+    const {data,error}=await query;if(error)throw error
     if (type === 'operators') {
       const g = new Map<string, any>(); for (const x of data || []) { const k=x.operator_id; const a=g.get(k)||{operator:x.operator_name,total:0,defects:0}; a.total+=n(x.quantity); a.defects+=n(x.defects); g.set(k,a) } rows=[...g.values()]
     } else {
       const monthly = type.endsWith('monthly'); const g=new Map<string,number>(); for(const x of data||[]){const d=new Date(x.production_at);const key=monthly?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit'}).format(d):new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);g.set(key,(g.get(key)||0)+n(x.quantity))} rows=[...g.entries()].map(([date,total])=>({date,total})).sort((a,b)=>String(b.date).localeCompare(String(a.date)))
     }
   } else if (type === 'sales' || type === 'sales-monthly') {
-    const { data,error }=await db.from('v_sales_summary').select('*').gte('sold_at',fromIso).lte('sold_at',toIso);if(error)throw error;const monthly=type.endsWith('monthly');const g=new Map<string,number>();for(const x of data||[]){const d=new Date(x.sold_at);const key=monthly?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit'}).format(d):new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);g.set(key,(g.get(key)||0)+n(x.net_total??x.total_amount))}rows=[...g.entries()].map(([date,total])=>({date,total})).sort((a,b)=>String(b.date).localeCompare(String(a.date)))
+    let saleQuery=db.from('v_sales_summary').select('*').gte('sold_at',fromIso).lte('sold_at',toIso)
+    if(productId){const{data:matches,error:em}=await db.from('sale_items').select('sale_id').eq('product_id',productId);if(em)throw em;const ids=[...new Set((matches||[]).map(x=>x.sale_id))];if(!ids.length)return json([]);saleQuery=saleQuery.in('id',ids)}
+    const{data,error}=await saleQuery;if(error)throw error;const monthly=type.endsWith('monthly');const g=new Map<string,number>();for(const x of data||[]){const d=new Date(x.sold_at);const key=monthly?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit'}).format(d):new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(d);g.set(key,(g.get(key)||0)+n(x.net_total??x.total_amount))}rows=[...g.entries()].map(([date,total])=>({date,total})).sort((a,b)=>String(b.date).localeCompare(String(a.date)))
   } else if (type === 'inventory') {
-    const { data,error }=await db.from('v_inventory_stock').select('*').order('name');if(error)throw error;rows=(data||[]).map(x=>({product:x.name,stock:n(x.stock),minimumStock:n(x.minimum_stock),price:n(x.price),stockValue:n(x.stock)*n(x.price)}))
+    let inventoryQuery=db.from('v_inventory_stock').select('*').order('name');if(productId)inventoryQuery=inventoryQuery.eq('product_id',productId);const{data,error}=await inventoryQuery;if(error)throw error;rows=(data||[]).map(x=>({product:x.name,stock:n(x.stock),minimumStock:n(x.minimum_stock),price:n(x.price),stockValue:n(x.stock)*n(x.price)}))
   } else if (type === 'debtors') {
     const { data,error }=await db.from('v_customer_balances').select('*').gt('balance',0).order('balance',{ascending:false});if(error)throw error;rows=(data||[]).map(x=>({customer:x.name,phone:x.phone,balance:n(x.balance)}))
   } else return fail('گزارش ناشناخته است',404)
@@ -558,6 +590,75 @@ async function operationsLedger(user: AppUser, url: URL) {
   return json(entries.slice(0,2500))
 }
 
+/** Read-only checks. These are alerts, not an accounting audit or an automatic correction. */
+async function reconciliation(user:AppUser){
+  manager(user)
+  const cutoff=new Date(Date.now()-90*86400000).toISOString()
+  const [inv,mats,debts,runs,salesQ,grinds,productsQ]=await Promise.all([
+    db.from('v_inventory_stock').select('product_id,name,stock').lt('stock',0).limit(100),
+    db.from('v_material_stock').select('material_id,name,stock_kg').lt('stock_kg',0).limit(100),
+    db.from('v_customer_balances').select('customer_id,name,phone,balance').gt('balance',0).limit(1000),
+    db.from('v_shift_runs').select('id,operator_name,shift_name,status,started_at').neq('status','FINALIZED').lt('started_at',new Date(Date.now()-12*3600000).toISOString()).limit(100),
+    db.from('sales').select('id,total_amount,sold_at').gte('sold_at',cutoff).order('sold_at',{ascending:false}).limit(100),
+    db.from('grinding_records').select('id,total_weight,ground_at').gte('ground_at',cutoff).order('ground_at',{ascending:false}).limit(100),
+    db.from('products').select('id,name,weight_kg').eq('is_active',true).limit(100),
+  ])
+  for(const r of [inv,mats,debts,runs,salesQ,grinds,productsQ])if(r.error)throw r.error
+  const warnings:any[]=[]
+  function warn(flow:string,code:string,title:string,detail:string,entityId?:string){
+    if(warnings.length<300)warnings.push({id:`${code}-${entityId||warnings.length}`,flow,code,title,detail,entityId:entityId||null})
+  }
+  for(const x of inv.data||[])warn('MATERIAL','NEGATIVE_FINISHED','موجودی سبد منفی است',`${x.name}: ${n(x.stock)} عدد؛ ممکن است پیش‌فروش یا ثبت‌نشدن تولید باشد.`,x.product_id)
+  for(const x of mats.data||[])warn('MATERIAL','NEGATIVE_MATERIAL','موجودی مواد منفی است',`${x.name}: ${n(x.stock_kg)} کیلوگرم؛ ورود، مصرف و اصلاح موجودی را کنترل کنید.`,x.material_id)
+  for(const x of debts.data||[])if(!/^\d{11}$/.test(normalizeDigits(x.phone||'')))warn('INFORMATION','DEBTOR_PHONE','شماره تماس بدهکار کامل نیست',`${x.name}: شماره تماس ۱۱ رقمی معتبر ندارد.`,x.customer_id)
+  for(const x of runs.data||[])warn('INFORMATION','OPEN_SHIFT','شیفت ثبت‌شده هنوز نهایی نشده',`${x.operator_name||'-'} — ${x.shift_name||'-'} — ${x.status}; کانتر شیفت بعد و تعداد معیوب را بررسی کنید.`,x.id)
+  for(const x of productsQ.data||[])if(n(x.weight_kg)<=0)warn('INFORMATION','MISSING_WEIGHT','وزن محصول تعریف نشده',`${x.name}: برآورد مصرف مواد و بهای تمام‌شده ممکن است ناقص باشد.`,x.id)
+  const saleIds=(salesQ.data||[]).map(x=>x.id)
+  if(saleIds.length){
+    const [lines,movements,ledger]=await Promise.all([
+      db.from('sale_items').select('sale_id,product_id,quantity').in('sale_id',saleIds).limit(1000),
+      db.from('inventory_transactions').select('reference_id,product_id,quantity').eq('reference_type','SALE').eq('transaction_type','SALE').in('reference_id',saleIds).limit(1000),
+      db.from('financial_entries').select('source_id,amount').eq('source_type','SALE').eq('entry_kind','SALE_REVENUE').in('source_id',saleIds).limit(1000),
+    ])
+    for(const r of [lines,movements,ledger])if(r.error)throw r.error
+    const map=new Map<string,number>(),posted=new Map<string,number>(),revenue=new Map<string,number>()
+    for(const x of lines.data||[]){const k=`${x.sale_id}/${x.product_id}`;map.set(k,(map.get(k)||0)+n(x.quantity))}
+    for(const x of movements.data||[]){const k=`${x.reference_id}/${x.product_id}`;posted.set(k,(posted.get(k)||0)+n(x.quantity))}
+    for(const x of ledger.data||[])revenue.set(x.source_id,(revenue.get(x.source_id)||0)+n(x.amount))
+    if((lines.data||[]).length<1000&&(movements.data||[]).length<1000&&(ledger.data||[]).length<1000){
+      for(const[k,qty]of map)if(Math.abs(qty-(posted.get(k)||0))>0.001)warn('MATERIAL','SALE_STOCK_MISMATCH','مغایرت فروش با خروجی انبار',`فاکتور ${k.split('/')[0].slice(0,8)}: فروش ${qty} عدد؛ خروجی انبار ${posted.get(k)||0} عدد.`,k.split('/')[0])
+      for(const sale of salesQ.data||[])if(Math.abs(n(sale.total_amount)-(revenue.get(sale.id)||0))>0.01)warn('FINANCIAL','SALE_LEDGER_MISMATCH','مغایرت مبلغ فروش و دفتر مالی',`فاکتور ${sale.id.slice(0,8)}: مبلغ ${n(sale.total_amount)} تومان؛ ثبت درآمد ${revenue.get(sale.id)||0} تومان.`,sale.id)
+    }else warn('INFORMATION','LIMITED_SCOPE','سقف جستجو پر شده','بعضی کنترل‌های فروش تکمیل نشدند؛ نتیجه این صفحه گزارش حسابرسی کامل نیست.')
+  }
+  const grindIds=(grinds.data||[]).map(x=>x.id)
+  if(grindIds.length){
+    const {data:tx,error}=await db.from('material_transactions').select('reference_id,transaction_type,quantity_kg').eq('reference_type','GRINDING').in('reference_id',grindIds).limit(1000)
+    if(error)throw error
+    if((tx||[]).length<1000){const totals=new Map<string,{inQty:number,outQty:number}>();for(const x of tx||[]){const p=totals.get(x.reference_id)||{inQty:0,outQty:0};if(x.transaction_type==='GRINDING_IN')p.inQty+=n(x.quantity_kg);if(x.transaction_type==='GRINDING_OUT')p.outQty+=n(x.quantity_kg);totals.set(x.reference_id,p)}
+      for(const g of grinds.data||[]){const t=totals.get(g.id)||{inQty:0,outQty:0};if(Math.abs(t.inQty-n(g.total_weight))>0.001||Math.abs(t.outQty-n(g.total_weight))>0.001)warn('MATERIAL','GRINDING_MISMATCH','مغایرت انتقال مواد آسیاب',`آسیاب ${g.id.slice(0,8)}: وزن ثبت‌شده ${n(g.total_weight)}؛ خروج ${t.outQty} و ورود ${t.inQty} کیلوگرم.`,g.id)}
+    }else warn('INFORMATION','LIMITED_GRIND','سقف جستجوی آسیاب پر شده','کنترل وزن بعضی آسیاب‌ها تکمیل نشده است.')
+  }
+  // Match committed source documents against their corresponding financial
+  // postings. Missing/duplicate postings are alerts; no data is modified.
+  const financialSources:[string,string,string][]=[
+    ['payments','paid_at','PAYMENT'],['purchases','purchased_at','PURCHASE'],
+    ['expenses','expense_date','EXPENSE'],['grinding_records','ground_at','GRINDING'],
+  ]
+  for(const [table,dateColumn,sourceType] of financialSources){
+    const {data:docs,error:docsError}=await db.from(table).select(sourceType==='PURCHASE'?'id,total_amount':sourceType==='GRINDING'?'id,labor_cost':'id,amount').gte(dateColumn,cutoff).order(dateColumn,{ascending:false}).limit(100)
+    if(docsError)throw docsError
+    const ids=(docs||[]).map((x:any)=>x.id)
+    if(!ids.length)continue
+    const {data:posts,error:postsError}=await db.from('financial_entries').select('source_id,amount,entry_kind').eq('source_type',sourceType).in('source_id',ids).limit(1000)
+    if(postsError)throw postsError
+    if((posts||[]).length>=1000){warn('INFORMATION','FINANCE_LIMIT','سقف بررسی دفتر مالی پر شده',`کنترل کامل ${sourceType} انجام نشد.`);continue}
+    const sums=new Map<string,number>()
+    for(const x of posts||[]){if(sourceType==='PAYMENT'&&x.entry_kind!=='CUSTOMER_RECEIPT')continue;const key=x.source_id;sums.set(key,(sums.get(key)||0)+n(x.amount))}
+    for(const d of docs||[]){const expected=n(sourceType==='PURCHASE'?d.total_amount:sourceType==='GRINDING'?d.labor_cost:d.amount);if(expected<=0)continue;const actual=sums.get(d.id)||0;if(Math.abs(expected-actual)>0.01)warn('FINANCIAL','SOURCE_LEDGER_MISMATCH','مغایرت سند و ثبت مالی',`${table} — کد ${d.id.slice(0,8)}: سند ${expected} تومان؛ دفتر مالی ${actual} تومان.`,d.id)}
+  }
+  return json({checkedAt:new Date().toISOString(),scope:'حداکثر ۱۰۰ سند اخیر از هر نوع در ۹۰ روز گذشته، مغایرت‌های موجودی جاری و شیفت‌های باز؛ این بررسی جایگزین حسابرسی کامل نیست.',warnings,counts:{MATERIAL:warnings.filter(x=>x.flow==='MATERIAL').length,FINANCIAL:warnings.filter(x=>x.flow==='FINANCIAL').length,INFORMATION:warnings.filter(x=>x.flow==='INFORMATION').length}})
+}
+
 async function handler(req: Request) {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   const url = new URL(req.url), path = normalizePath(url.pathname), method = req.method.toUpperCase()
@@ -573,10 +674,12 @@ async function handler(req: Request) {
   if (method === 'GET' && path === '/current-status') return currentStatus(user)
   if (method === 'GET' && path === '/finance/summary') return financeSummary(user,url)
   if (method === 'GET' && path === '/operations-ledger') return operationsLedger(user,url)
+  if (method === 'GET' && path === '/reconciliation') return reconciliation(user)
 
   const handlers = [products, customers]
   for (const h of handlers) { const r = await h(req, path, method, user, url); if (r) return r }
-  for (const h of [production, sales, payments, inventory, materials, operations, users]) { const r = await h(req, path, method, user); if (r) return r }
+  const saleResult=await sales(req,path,method,user,url);if(saleResult)return saleResult
+  for (const h of [production, payments, inventory, materials, operations, users]) { const r = await h(req, path, method, user); if (r) return r }
   const rr = await reports(path, user, url); if (rr) return rr
   if (method === 'GET' && path === '/activity') {
     manager(user); const { data,error }=await db.from('activity_logs').select('id,action,entity_type,entity_id,details,created_at,users(full_name)').order('created_at',{ascending:false}).limit(500);if(error)throw error;return json((data||[]).map((x:any)=>({id:x.id,action:x.action,entityType:x.entity_type,entityId:x.entity_id,details:x.details,createdAt:x.created_at,userName:x.users?.full_name||null})))

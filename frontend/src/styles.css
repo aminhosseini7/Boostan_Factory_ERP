@@ -72,3 +72,18 @@
 .add-sale-item-btn{width:36px;min-width:36px;height:36px;min-height:36px;padding:0!important;border-radius:50%;font-size:22px;line-height:1;font-weight:700;display:inline-grid;place-items:center;justify-self:end}
 .driver-section{display:grid;gap:8px}.driver-toggle{width:max-content;min-height:36px;padding:7px 12px!important;font-size:13px}.driver-box{margin-top:0}
 @media(max-width:650px){.add-sale-item-btn{justify-self:start}.driver-toggle{width:100%}}
+
+/* v2.9 compact recent sections and complete dark-theme inputs/panels */
+.recent-scroll{max-height:350px;overflow:auto;overscroll-behavior:contain;border:1px solid #e2e8f0;border-radius:10px}
+.recent-scroll thead th{position:sticky;top:0;z-index:1}
+.show-settled{display:flex;gap:7px;align-items:center;font-size:12px;margin-top:7px}
+.show-settled input{width:16px;height:16px;flex:0 0 auto}
+:root[data-theme="dark"] .recent-scroll{border-color:#475569}
+:root[data-theme="dark"] .estimate,:root[data-theme="dark"] .return-items,:root[data-theme="dark"] .return-line,:root[data-theme="dark"] .warning,:root[data-theme="dark"] .stock-indicator,:root[data-theme="dark"] .material-stock,:root[data-theme="dark"] .debt-preview{background:#1e293b!important;color:#f8fafc!important;border-color:#475569!important}
+:root[data-theme="dark"] .return-items span,:root[data-theme="dark"] .return-items h4,:root[data-theme="dark"] .estimate strong,:root[data-theme="dark"] .warning strong{color:#f8fafc!important}
+:root[data-theme="dark"] option{background:#172033;color:#f8fafc}
+.sale-choice-summary{padding:10px;background:#f1f5f9;color:#334155;border-radius:8px;margin:12px 0}
+:root[data-theme="dark"] .sale-choice-summary{background:#1e293b;color:#f8fafc}
+.reconciliation{border:1px solid #cbd5e1}.correction-help{margin-top:12px;padding:12px;background:#f1f5f9;border-radius:10px;line-height:1.8}.correction-help p{margin:4px 0 0}
+:root[data-theme="dark"] .reconciliation{border-color:#475569}:root[data-theme="dark"] .correction-help{background:#1e293b;color:#f8fafc}
+.report-product-select{display:grid;gap:4px;min-width:165px}
