@@ -14,7 +14,7 @@ export default function ProductAnalytics({ products = [] }) {
 
     try {
       const response = await api.get(
-        `/products/analytics?productId=${selectedProduct}&targetMarginPct=${marginPct}`
+        `/products/analytics?productId=${selectedProduct}&margin=${marginPct}`
       );
 
       const data = response.data;
