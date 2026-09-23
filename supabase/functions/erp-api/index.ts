@@ -270,7 +270,23 @@ async function sales(req: Request, path: string, method: string, user: AppUser, 
       else q=q.ilike('customer_name',`%${safe}%`)
     }
     const {data,error}=await q;if(error)throw error
-    return json((data||[]).map(mapSale))
+    const saleRows=data||[]
+    const saleIds=saleRows.map((sale:any)=>sale.id)
+    const totals=new Map<string,number>()
+    if(saleIds.length){
+      const pageSize=1000
+      for(let start=0;;start+=pageSize){
+        const {data:lines,error:lineError}=await db.from('sale_items')
+          .select('id,sale_id,quantity').in('sale_id',saleIds)
+          .order('id',{ascending:true}).range(start,start+pageSize-1)
+        if(lineError)throw lineError
+        for(const line of lines||[]){
+          totals.set(line.sale_id,(totals.get(line.sale_id)||0)+n(line.quantity))
+        }
+        if((lines||[]).length<pageSize)break
+      }
+    }
+    return json(saleRows.map((sale:any)=>({...mapSale(sale),totalQuantity:totals.get(sale.id)||0})))
   }
   if (method === 'GET' && id) {
     let q = db.from('v_sales_summary').select('*').eq('id', id)

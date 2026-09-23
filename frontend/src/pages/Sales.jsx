@@ -12,6 +12,7 @@ export default function Sales(){
  const [error,setError]=useState(null),[ok,setOk]=useState(''),[busy,setBusy]=useState(false);
  const [query,setQuery]=useState(''),[from,setFrom]=useState(''),[to,setTo]=useState('');
  const [enteredBy,setEnteredBy]=useState('');
+ const [creators,setCreators]=useState([]);
  const [selected,setSelected]=useState(''),[searching,setSearching]=useState(false);
 
  async function load(options){
@@ -26,10 +27,30 @@ export default function Sales(){
    setCustomers(c.data.filter(x=>x.isActive));
    setProducts(p.data);
    setSales(s.data);
+   setCreators(previous=>{
+    const byId=new Map(previous.map(person=>[person.id,person]));
+    for(const record of s.data){
+     if(record.enteredBy)byId.set(record.enteredBy,{id:record.enteredBy,fullName:record.enteredByName||byId.get(record.enteredBy)?.fullName||'ثبت‌کننده بدون نام'});
+    }
+    return [...byId.values()].sort((a,b)=>a.fullName.localeCompare(b.fullName,'fa'));
+   });
   }catch(e){setError(e)}
  }
 
- useEffect(()=>{load()},[]);
+ useEffect(()=>{
+  load();
+  // This manager-only endpoint supplies all registered users, including ones
+  // with no sale in the default 50-hour search window.
+  api.get('/users').then(response=>{
+   setCreators(previous=>{
+    const byId=new Map(previous.map(person=>[person.id,person]));
+    for(const person of response.data||[]){
+     if(person.id)byId.set(person.id,{id:person.id,fullName:person.fullName||byId.get(person.id)?.fullName||'ثبت‌کننده بدون نام'});
+    }
+    return [...byId.values()].sort((a,b)=>a.fullName.localeCompare(b.fullName,'fa'));
+   });
+  }).catch(()=>{}); // Sales still works if the users list is unavailable.
+ },[]);
 
  async function search(e){
   e.preventDefault();
@@ -42,9 +63,8 @@ export default function Sales(){
  }
 
  function saleQuantity(x){
-  if(Array.isArray(x.items))
-   return x.items.reduce((sum,item)=>sum+Number(item.quantity||0),0);
-  return Number(x.quantity||0);
+  // Do not invent zero when the older API omits this field.
+  return x.totalQuantity==null?'—':Number(x.totalQuantity).toLocaleString('fa-IR');
  }
 
  return <Page title="فروش">
@@ -67,10 +87,7 @@ export default function Sales(){
  <label>ثبت‌کننده
  <select value={enteredBy} onChange={e=>setEnteredBy(e.target.value)}>
  <option value="">همه</option>
- <option value="manager">مدیر</option>
- <option value="operator1">اپراتور ۱</option>
- <option value="operator2">اپراتور ۲</option>
- <option value="operator3">اپراتور ۳</option>
+ {creators.map(person=><option key={person.id} value={person.id}>{person.fullName}</option>)}
  </select>
  </label>
 
