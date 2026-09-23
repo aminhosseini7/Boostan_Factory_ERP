@@ -1,3 +1,4 @@
+// Boostan ERP v3 costing upgrade patch
 import { createClient } from 'npm:@supabase/supabase-js@2.95.0'
 import bcrypt from 'npm:bcryptjs@2.4.3'
 import jwt from 'npm:jsonwebtoken@9.0.2'
@@ -250,8 +251,10 @@ async function sales(req: Request, path: string, method: string, user: AppUser, 
     // manager's recent sales panel; return search deliberately omits it.
     const since=url.searchParams.get('since'),from=url.searchParams.get('from'),to=url.searchParams.get('to')
     const search=normalizeDigits(url.searchParams.get('q')||'').trim()
+    const enteredBy=(url.searchParams.get('enteredBy')||'').trim()
     let q=db.from('v_sales_summary').select('*').order('sold_at',{ascending:false}).limit(150)
     if(user.role!=='MANAGER')q=q.eq('operator_id',user.id)
+    if(enteredBy)q=q.eq('entered_by',enteredBy)
     if(since){if(!Number.isFinite(Date.parse(since)))return fail('زمان شروع جستجو معتبر نیست');q=q.gte('sold_at',new Date(since).toISOString())}
     if(from){if(!/^\d{4}-\d{2}-\d{2}$/.test(from))return fail('تاریخ شروع جستجو معتبر نیست');q=q.gte('sold_at',`${from}T00:00:00+03:30`)}
     if(to){if(!/^\d{4}-\d{2}-\d{2}$/.test(to))return fail('تاریخ پایان جستجو معتبر نیست');q=q.lte('sold_at',`${to}T23:59:59+03:30`)}
@@ -559,7 +562,8 @@ async function productAnalytics(user:AppUser,url:URL){
     producedUnits:produced,defectiveUnits:Math.max(0,gross-produced),materialPriceKg,overheadPerKg,
     estimatedUnitCost:unitCost,estimatedGrossProfit:netCost==null?null:netRevenue-netCost,
     estimatedUnitProfit:unitCost==null||netQty<=0?null:netRevenue/netQty-unitCost,
-    estimatedMarginPct:netCost==null||netRevenue<=0?null:100*(netRevenue-netCost)/netRevenue}
+    estimatedMarginPct:netCost==null||netRevenue<=0?null:100*(netRevenue-netCost)/netRevenue,
+     suggestedSalePrice:unitCost==null||targetMarginPct<=0?null:unitCost/(1-targetMarginPct/100)}
  })
  return json({from,to,rows,disclaimer:'این اعداد فقط برآورد وزنی‌اند: قیمت خرید مواد در بازه، سربار تخصیص‌یافته بر وزن تولید، و ضایعات ثبت‌شده هر محصول مبنا هستند. ارزش موجودی ابتدای دوره، ترکیب مواد نو/آسیابی، ضایعات بازیافتی و هزینه ماشین به تفکیک محصول ارزش‌گذاری قطعی نشده‌اند. تخفیف وصول مشتری به محصول خاص تخصیص نمی‌یابد؛ بنابراین سود و بهای تمام‌شده حسابداری قطعی نیستند.'})
 }
