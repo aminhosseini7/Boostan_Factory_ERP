@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
+import api from "../services/api";
 
 export default function ProductAnalytics({ products = [] }) {
   const [selectedProduct, setSelectedProduct] = useState("");
@@ -6,39 +7,28 @@ export default function ProductAnalytics({ products = [] }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const getToken = () =>
-    localStorage.getItem("token") ||
-    localStorage.getItem("access_token") ||
-    localStorage.getItem("auth_token") ||
-    "";
-
   async function calculateCosting() {
     if (!selectedProduct) return;
 
     setLoading(true);
 
     try {
-      const token = getToken();
-
-      const res = await fetch(
-        `/api/products/analytics?productId=${selectedProduct}&targetMarginPct=${marginPct}`,
-        {
-          headers: {
-            Authorization: token ? `Bearer ${token}` : "",
-            "Content-Type": "application/json",
-          },
-        }
+      const response = await api.get(
+        `/products/analytics?productId=${selectedProduct}&targetMarginPct=${marginPct}`
       );
 
-      const json = await res.json();
+      const data = response.data;
 
-      if (json.success === false) {
-        setResult(null);
-        return;
-      }
+      console.log("COSTING RESPONSE:", data);
 
-      const row = (json.rows || []).find(
-        (x) => x.productId === selectedProduct
+
+
+
+
+
+
+      const row = (data.rows || []).find(
+        (item) => item.productId === selectedProduct
       );
 
       setResult(row || null);
@@ -49,10 +39,6 @@ export default function ProductAnalytics({ products = [] }) {
       setLoading(false);
     }
   }
-
-  useEffect(() => {
-    if (!selectedProduct) setResult(null);
-  }, [selectedProduct]);
 
   return (
     <div className="panel">
@@ -83,7 +69,9 @@ export default function ProductAnalytics({ products = [] }) {
           />
         </label>
 
-        <button onClick={calculateCosting}>محاسبه</button>
+        <button onClick={calculateCosting}>
+          محاسبه
+        </button>
       </div>
 
       {loading && <p>در حال محاسبه...</p>}
