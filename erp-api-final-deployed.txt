@@ -267,27 +267,7 @@ async function sales(req: Request, path: string, method: string, user: AppUser, 
       else q=q.ilike('customer_name',`%${safe}%`)
     }
     const {data,error}=await q;if(error)throw error
-    const salesRows=data||[]
-    const saleIds=salesRows.map((x:any)=>x.id)
-    let saleMeta=new Map<string,{quantity:number,productNames:string[]}>()
-    if(saleIds.length){
-      const {data:items,error:itemError}=await db.from('sale_items')
-        .select('sale_id,quantity,products(name)')
-        .in('sale_id',saleIds)
-      if(itemError)throw itemError
-      for(const item of items||[]){
-        const current=saleMeta.get(item.sale_id)||{quantity:0,productNames:[]}
-        current.quantity+=n(item.quantity)
-        if(item.products?.name && !current.productNames.includes(item.products.name))
-          current.productNames.push(item.products.name)
-        saleMeta.set(item.sale_id,current)
-      }
-    }
-    return json(salesRows.map((x:any)=>({
-      ...mapSale(x),
-      quantity:saleMeta.get(x.id)?.quantity||0,
-      productNames:saleMeta.get(x.id)?.productNames||[]
-    })))
+    return json((data||[]).map(mapSale))
   }
   if (method === 'GET' && id) {
     let q = db.from('v_sales_summary').select('*').eq('id', id)
@@ -550,58 +530,89 @@ async function users(req: Request, path: string, method: string, user: AppUser) 
 }
 
 async function productAnalytics(user:AppUser,url:URL){
-  manager(user)
-  const from=url.searchParams.get('from')||new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
-  const to=url.searchParams.get('to')||from
-  if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
+ manager(user)
+ const from=url.searchParams.get('from')||new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+ const to=url.searchParams.get('to')||from
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
+ const [performance,financeResponse,purchaseResponse,productsResponse]=await Promise.all([
+   db.rpc('boostan_product_performance',{p_from:`${from}T00:00:00+03:30`,p_to:`${to}T23:59:59.999+03:30`}),
+   financeSummary(user,url),
+   db.from('purchases').select('purchase_type,quantity,total_amount,unit_price,purchased_at').in('purchase_type',['RAW_MATERIAL','USED_SCRAP']).order('purchased_at',{ascending:false}),
+   db.from('products').select('id,name,price,weight_kg,is_active').order('name'),
+ ])
+ if(performance.error||purchaseResponse.error||productsResponse.error)throw performance.error||purchaseResponse.error||productsResponse.error
+ const fin=await financeResponse.json()
+ const costingDays=Math.max(1,Math.min(180,n(url.searchParams.get('costingDays')||14)))
 
-  const [performance,productsCostResponse,productsResponse]=await Promise.all([
-    db.rpc('boostan_product_performance',{p_from:`${from}T00:00:00+03:30`,p_to:`${to}T23:59:59.999+03:30`}),
-    db.from('v_final_product_standard_cost').select('*'),
-    db.from('products').select('id,name,price,weight_kg,is_active').order('name')
-  ])
+ const purchases=(purchaseResponse.data||[]).filter((x:any)=>true)
 
-  if(performance.error||productsCostResponse.error||productsResponse.error)
-    throw performance.error||productsCostResponse.error||productsResponse.error
+ const rawPurchases=purchases.filter((x:any)=>x.purchase_type==='RAW_MATERIAL')
+ const scrapPurchases=purchases.filter((x:any)=>x.purchase_type==='USED_SCRAP')
+  // Latest raw material purchase is the active raw material cost.
+  // Previous weighted averages are intentionally not used.
+  // Latest direct material purchase is the active raw material cost.
+  // We intentionally do not average previous purchases because factory stock
+  // is consumed in short cycles and old prices should not affect current cost.
+  const latestRaw = rawPurchases
+    .slice()
+    .sort((a:any,b:any)=>new Date(b.purchased_at).getTime()-new Date(a.purchased_at).getTime())[0]
 
-  const costMap=new Map((productsCostResponse.data||[]).map((x:any)=>[x.product_id,x]))
-  const byId=new Map((performance.data||[]).map((x:any)=>[x.product_id,x]))
+  const rawMaterialKgCost = latestRaw
+    ? (n(latestRaw.weight_kg)>0
+        ? n(latestRaw.total_amount)/n(latestRaw.weight_kg)
+        : (n(latestRaw.quantity)>0 ? n(latestRaw.total_amount)/n(latestRaw.quantity) : null))
+    : null
 
-  const rows=(productsResponse.data||[]).map((p:any)=>{
-    const x:any=byId.get(p.id)||{}
-    const c:any=costMap.get(p.id)||{}
 
-    const sold=n(x.sold_units)
-    const returned=n(x.return_units)
-    const netQty=sold-returned
-    const netRevenue=n(x.net_revenue)
+ const scrapKg=scrapPurchases.reduce((s,x)=>s+n(x.quantity),0)
+ const scrapCost=scrapPurchases.reduce((s,x)=>s+n(x.total_amount),0)
+ const scrapPurchaseKgCost=scrapKg>0?scrapCost/scrapKg:0
 
-    const unitCost=n(c.final_unit_cost)>0?n(c.final_unit_cost):null
-    const unitProfit=unitCost===null?null:n(p.price)-unitCost
-    const grossProfit=unitCost===null?null:netRevenue-(netQty*unitCost)
+ const grindingKg=(fin.grindingKg||0)
+ const grindingLabor=n(fin.grindingCost)
+ const grindingLaborKgCost=grindingKg>0?grindingLabor/grindingKg:0
 
-    return {
-      productId:p.id, productName:p.name, weightKg:n(p.weight_kg),
-      price:n(p.price), isActive:p.is_active,
-      soldUnits:sold, returnUnits:returned, netUnits:netQty,
-      grossRevenue:n(x.gross_revenue), netRevenue,
-      producedUnits:n(x.produced_units),
-      defectiveUnits:Math.max(0,n(x.gross_units)-n(x.produced_units)),
-      materialCost:n(c.material_cost),
-      productionCost:n(c.production_cost),
-      overheadCost:n(c.overhead_cost),
-      estimatedUnitCost:unitCost,
-      estimatedGrossProfit:grossProfit,
-      estimatedUnitProfit:unitProfit,
-      estimatedMarginPct:unitProfit===null||n(p.price)<=0?null:(unitProfit/n(p.price))*100,
-      suggestedSalePrice:n(c.suggested_sale_price)
-    }
-  })
+ const grindingMaterialKgCost =
+   scrapPurchaseKgCost + grindingLaborKgCost
 
-  return json({
-    from,to,rows,
-    disclaimer:'بهای تمام‌شده از موتور استاندارد کارخانه محاسبه می‌شود: آخرین قیمت ماده مستقیم، سهم مواد آسیاب، هزینه تولید، سربار و ضایعات. این خروجی برای تصمیم‌گیری مدیریتی است و جایگزین ثبت حسابداری قطعی نیست.'
-  })
+ const {data:factoryMix}=await db
+   .from('v_factory_material_mix')
+   .select('*')
+   .maybeSingle()
+
+ const rawPct=n(factoryMix?.raw_ready_pct)||1
+ const grindPct=n(factoryMix?.scrap_grind_pct)||0
+
+ const materialPriceKg =
+   (n(rawMaterialKgCost)*rawPct)
+   +
+   (grindingMaterialKgCost*grindPct)
+
+ const overheadPerKg=n(fin.productionKg)>0
+   ? n(fin.allocatedExpense)/n(fin.productionKg)
+   : null
+
+ const byId=new Map((performance.data||[]).map((x:any)=>[x.product_id,x]))
+
+ const rows=(productsResponse.data||[]).map((p:any)=>{
+  const x:any=byId.get(p.id)||{}
+  const sold=n(x.sold_units),returned=n(x.return_units),netQty=sold-returned
+  const produced=n(x.produced_units),gross=n(x.gross_units)
+  const weight=n(p.weight_kg)
+  const yieldRate=produced>0?gross/produced:1
+
+  const unitCost=weight>0&&materialPriceKg!=null
+    ? weight*(materialPriceKg*yieldRate)+(overheadPerKg||0)
+    : null
+  const netRevenue=n(x.net_revenue),netCost=unitCost==null?null:netQty*unitCost
+  return {productId:p.id,productName:p.name,weightKg:weight,price:n(p.price),isActive:p.is_active,
+    soldUnits:sold,returnUnits:returned,netUnits:netQty,grossRevenue:n(x.gross_revenue),netRevenue,
+    producedUnits:produced,defectiveUnits:Math.max(0,gross-produced),materialPriceKg,overheadPerKg,
+    estimatedUnitCost:unitCost,estimatedGrossProfit:netCost==null?null:netRevenue-netCost,
+    estimatedUnitProfit:unitCost==null||netQty<=0?null:netRevenue/netQty-unitCost,
+    estimatedMarginPct:netCost==null||netRevenue<=0?null:100*(netRevenue-netCost)/netRevenue}
+ })
+ return json({from,to,rows,disclaimer:'این اعداد فقط برآورد وزنی‌اند: قیمت خرید مواد در بازه، سربار تخصیص‌یافته بر وزن تولید، و ضایعات ثبت‌شده هر محصول مبنا هستند. ارزش موجودی ابتدای دوره، ترکیب مواد نو/آسیابی، ضایعات بازیافتی و هزینه ماشین به تفکیک محصول ارزش‌گذاری قطعی نشده‌اند. تخفیف وصول مشتری به محصول خاص تخصیص نمی‌یابد؛ بنابراین سود و بهای تمام‌شده حسابداری قطعی نیستند.'})
 }
 
 async function dashboard(user: AppUser,url:URL) {

@@ -563,25 +563,31 @@ async function productAnalytics(user:AppUser,url:URL){
  const fin=await financeResponse.json()
  const purchasedKg=(purchaseResponse.data||[]).reduce((s,x)=>s+n(x.quantity),0)
  const materialPriceKg=purchasedKg>0?(purchaseResponse.data||[]).reduce((s,x)=>s+n(x.total_amount),0)/purchasedKg:null
- const overheadPerKg=n(fin.productionKg)>0?(n(fin.allocatedExpense)+n(fin.grindingCost))/n(fin.productionKg):null
+ const overheadPerUnit=n(fin.productionUnits)>0?n(fin.allocatedExpense)/n(fin.productionUnits):null
+ const grindingPerKg=n(fin.productionKg)>0?n(fin.grindingCost)/n(fin.productionKg):null
+ const targetMarginPct=Math.min(Math.max(n(url.searchParams.get('margin')||0),0),99)
  const byId=new Map((performance.data||[]).map((x:any)=>[x.product_id,x]))
  const rows=(productsResponse.data||[]).map((p:any)=>{
   const x:any=byId.get(p.id)||{}
   const sold=n(x.sold_units),returned=n(x.return_units),netQty=sold-returned
   const produced=n(x.produced_units),gross=n(x.gross_units),yieldRate=produced>0?gross/produced:null
   const weight=n(p.weight_kg)
-  const unitCost=materialPriceKg!=null&&overheadPerKg!=null&&yieldRate!=null&&weight>0
-    ? weight*(materialPriceKg*yieldRate+overheadPerKg):null
+  const materialCost=materialPriceKg!=null&&yieldRate!=null&&weight>0
+    ? weight*(materialPriceKg*yieldRate):null
+  const grindingCost=grindingPerKg!=null&&weight>0 ? weight*grindingPerKg : null
+  const overheadCost=overheadPerUnit
+  const unitCost=materialCost!=null&&overheadCost!=null
+    ? materialCost+(grindingCost||0)+overheadCost:null
   const netRevenue=n(x.net_revenue),netCost=unitCost==null?null:netQty*unitCost
   return {productId:p.id,productName:p.name,weightKg:weight,price:n(p.price),isActive:p.is_active,
     soldUnits:sold,returnUnits:returned,netUnits:netQty,grossRevenue:n(x.gross_revenue),netRevenue,
-    producedUnits:produced,defectiveUnits:Math.max(0,gross-produced),materialPriceKg,overheadPerKg,
+    producedUnits:produced,defectiveUnits:Math.max(0,gross-produced),materialPriceKg,grindingPerKg,overheadPerUnit,targetMarginPct,materialCost,grindingCost,overheadCost,
     estimatedUnitCost:unitCost,estimatedGrossProfit:netCost==null?null:netRevenue-netCost,
     estimatedUnitProfit:unitCost==null||netQty<=0?null:netRevenue/netQty-unitCost,
     estimatedMarginPct:netCost==null||netRevenue<=0?null:100*(netRevenue-netCost)/netRevenue,
      suggestedSalePrice:unitCost==null||targetMarginPct<=0?null:unitCost/(1-targetMarginPct/100)}
  })
- return json({from,to,rows,disclaimer:'این اعداد فقط برآورد وزنی‌اند: قیمت خرید مواد در بازه، سربار تخصیص‌یافته بر وزن تولید، و ضایعات ثبت‌شده هر محصول مبنا هستند. ارزش موجودی ابتدای دوره، ترکیب مواد نو/آسیابی، ضایعات بازیافتی و هزینه ماشین به تفکیک محصول ارزش‌گذاری قطعی نشده‌اند. تخفیف وصول مشتری به محصول خاص تخصیص نمی‌یابد؛ بنابراین سود و بهای تمام‌شده حسابداری قطعی نیستند.'})
+ return json({from,to,rows,disclaimer:'این اعداد فقط برآورد وزنی‌اند: قیمت خرید مواد در بازه، سربار تخصیص‌یافته بر تعداد تولید، و ضایعات ثبت‌شده هر محصول مبنا هستند. ارزش موجودی ابتدای دوره، ترکیب مواد نو/آسیابی، ضایعات بازیافتی و هزینه ماشین به تفکیک محصول ارزش‌گذاری قطعی نشده‌اند. تخفیف وصول مشتری به محصول خاص تخصیص نمی‌یابد؛ بنابراین سود و بهای تمام‌شده حسابداری قطعی نیستند.'})
 }
 
 async function dashboard(user: AppUser,url:URL) {

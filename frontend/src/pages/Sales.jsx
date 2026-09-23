@@ -101,7 +101,7 @@ export default function Sales(){
  {sales.length===0?<Empty/>:
  <div className="report-table recent-scroll"><table>
  <thead><tr>
- <th>مشتری</th><th>تعداد</th><th>مبلغ خالص</th><th>پرداخت</th>
+ <th>مشتری</th><th>نوع سبد</th><th>تعداد</th><th>مبلغ خالص</th><th>پرداخت</th>
  <th>ثبت‌کننده</th><th>اپراتور</th><th>وضعیت</th><th>زمان</th><th>اصلاح</th>
  </tr></thead>
  <tbody>

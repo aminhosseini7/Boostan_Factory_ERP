@@ -267,27 +267,7 @@ async function sales(req: Request, path: string, method: string, user: AppUser, 
       else q=q.ilike('customer_name',`%${safe}%`)
     }
     const {data,error}=await q;if(error)throw error
-    const salesRows=data||[]
-    const saleIds=salesRows.map((x:any)=>x.id)
-    let saleMeta=new Map<string,{quantity:number,productNames:string[]}>()
-    if(saleIds.length){
-      const {data:items,error:itemError}=await db.from('sale_items')
-        .select('sale_id,quantity,products(name)')
-        .in('sale_id',saleIds)
-      if(itemError)throw itemError
-      for(const item of items||[]){
-        const current=saleMeta.get(item.sale_id)||{quantity:0,productNames:[]}
-        current.quantity+=n(item.quantity)
-        if(item.products?.name && !current.productNames.includes(item.products.name))
-          current.productNames.push(item.products.name)
-        saleMeta.set(item.sale_id,current)
-      }
-    }
-    return json(salesRows.map((x:any)=>({
-      ...mapSale(x),
-      quantity:saleMeta.get(x.id)?.quantity||0,
-      productNames:saleMeta.get(x.id)?.productNames||[]
-    })))
+    return json((data||[]).map(mapSale))
   }
   if (method === 'GET' && id) {
     let q = db.from('v_sales_summary').select('*').eq('id', id)

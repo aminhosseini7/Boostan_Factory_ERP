@@ -19,6 +19,10 @@ export default function ProductAnalytics({ products = [] }) {
 
       const data = response.data;
 
+      
+      console.log("COSTING RESPONSE:", data);
+      console.log("COSTING ERROR:", error);
+
 
 
 
