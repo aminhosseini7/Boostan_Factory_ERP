@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 export default function ProductAnalytics({ products = [] }) {
   const [selectedProduct, setSelectedProduct] = useState("");
@@ -21,7 +21,7 @@ export default function ProductAnalytics({ products = [] }) {
       const token = getToken();
 
       const res = await fetch(
-        `/api/products/costing?productId=${selectedProduct}&marginPct=${marginPct}`,
+        `/api/products/analytics?productId=${selectedProduct}&targetMarginPct=${marginPct}`,
         {
           headers: {
             Authorization: token ? `Bearer ${token}` : "",
@@ -37,7 +37,11 @@ export default function ProductAnalytics({ products = [] }) {
         return;
       }
 
-      setResult(json.data || json.product || json);
+      const row = (json.rows || []).find(
+        (x) => x.productId === selectedProduct
+      );
+
+      setResult(row || null);
     } catch (error) {
       console.error("Costing error:", error);
       setResult(null);
@@ -45,6 +49,10 @@ export default function ProductAnalytics({ products = [] }) {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!selectedProduct) setResult(null);
+  }, [selectedProduct]);
 
   return (
     <div className="panel">
@@ -75,9 +83,7 @@ export default function ProductAnalytics({ products = [] }) {
           />
         </label>
 
-        <button onClick={calculateCosting}>
-          محاسبه
-        </button>
+        <button onClick={calculateCosting}>محاسبه</button>
       </div>
 
       {loading && <p>در حال محاسبه...</p>}
@@ -98,8 +104,8 @@ export default function ProductAnalytics({ products = [] }) {
               <td>{Number(result.materialCost || 0).toLocaleString()}</td>
               <td>{Number(result.grindingCost || 0).toLocaleString()}</td>
               <td>{Number(result.overheadCost || 0).toLocaleString()}</td>
-              <td>{Number(result.totalCost || result.unitCost || 0).toLocaleString()}</td>
-              <td>{Number(result.suggestedPrice || 0).toLocaleString()}</td>
+              <td>{Number(result.estimatedUnitCost || 0).toLocaleString()}</td>
+              <td>{Number(result.suggestedSalePrice || 0).toLocaleString()}</td>
             </tr>
           </tbody>
         </table>
