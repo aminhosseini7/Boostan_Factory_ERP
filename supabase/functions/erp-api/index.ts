@@ -142,6 +142,14 @@ async function products(req: Request, path: string, method: string, user: AppUse
     await db.from('activity_logs').insert({ user_id: user.id, action: 'UPDATE_PRODUCT', entity_type: 'PRODUCT', entity_id: id, details: { oldPrice: n(old.price), newPrice: price } })
     return json(mapProduct(data))
   }
+  if (method === 'PATCH' && path.match(/^\/products\/[0-9a-f-]+\/active$/i)) {
+    manager(user); const productId=path.split('/')[2]; const b=await body(req)
+    if(typeof b.isActive!=='boolean')return fail('وضعیت محصول معتبر نیست')
+    const {data,error}=await db.from('products').update({is_active:b.isActive,updated_at:new Date().toISOString()}).eq('id',productId).select('*').maybeSingle()
+    if(error)throw error;if(!data)return fail('محصول پیدا نشد',404)
+    await db.from('activity_logs').insert({user_id:user.id,action:b.isActive?'ACTIVATE_PRODUCT':'DEACTIVATE_PRODUCT',entity_type:'PRODUCT',entity_id:productId,details:{}})
+    return json(mapProduct(data))
+  }
   if (method === 'DELETE' && id) {
     manager(user); const { data, error } = await db.from('products').update({ is_active: false, updated_at: new Date().toISOString() }).eq('id', id).select('id').maybeSingle(); if (error) throw error
     if (!data) return fail('محصول پیدا نشد', 404)
@@ -169,11 +177,13 @@ async function customers(req: Request, path: string, method: string, user: AppUs
       db.from('customers').select('*').eq('id', statementId).maybeSingle(),
       db.from('v_sales_summary').select('id,total_amount,net_total,returned_amount,payment_type,payment_amount,status,sold_at').eq('customer_id', statementId).order('sold_at', { ascending: false }),
       db.from('payments').select('id,sale_id,amount,payment_method,paid_at,note').eq('customer_id', statementId).order('paid_at', { ascending: false }),
-      db.from('v_customer_balances').select('balance').eq('customer_id', statementId).maybeSingle(),
+      db.from('v_customer_balances').select('balance,discounts_total').eq('customer_id', statementId).maybeSingle(),
     ])
     if (ec || es || ep || eb) throw ec || es || ep || eb
     if (!customer) return fail('مشتری پیدا نشد', 404)
-    return json({ customer: mapCustomer(customer), sales: (sales || []).map(x => ({ id: x.id, totalAmount: n(x.total_amount), netTotal: n(x.net_total), returnedAmount: n(x.returned_amount), paymentType: x.payment_type, paymentAmount: n(x.payment_amount), status: x.status, soldAt: x.sold_at })), payments: (pays || []).map(x => ({ id: x.id, saleId: x.sale_id, amount: n(x.amount), paymentMethod: x.payment_method, paidAt: x.paid_at, note: x.note })), balance: n(bal?.balance) })
+    const {data:discountRows,error:discountError}=await db.from('settlement_discounts').select('id,amount,note,created_at,payment_id').eq('customer_id',statementId).order('created_at',{ascending:false})
+    if(discountError)throw discountError
+    return json({discounts:(discountRows||[]).map(x=>({id:x.id,amount:n(x.amount),note:x.note,createdAt:x.created_at,paymentId:x.payment_id})),discountTotal:n(bal?.discounts_total), customer: mapCustomer(customer), sales: (sales || []).map(x => ({ id: x.id, totalAmount: n(x.total_amount), netTotal: n(x.net_total), returnedAmount: n(x.returned_amount), paymentType: x.payment_type, paymentAmount: n(x.payment_amount), status: x.status, soldAt: x.sold_at })), payments: (pays || []).map(x => ({ id: x.id, saleId: x.sale_id, amount: n(x.amount), paymentMethod: x.payment_method, paidAt: x.paid_at, note: x.note })), balance: n(bal?.balance) })
   }
   if (method === 'GET' && id) {
     const { data, error } = await db.from('customers').select('*').eq('id', id).maybeSingle(); if (error) throw error
@@ -219,6 +229,7 @@ async function production(req: Request, path: string, method: string, user: AppU
   if (method === 'POST' && path === '/production/start') {
     const b = await body(req)
     if (!b.productId || b.counterStart === '' || b.counterStart == null) return fail('محصول و کانتر شروع الزامی است')
+    if (!/^\d{7}$/.test(normalizeDigits(String(b.counterStart ?? '')))) return fail('کانتر دستگاه باید دقیقاً ۷ رقم باشد؛ صفرهای ابتدای عدد را نیز وارد کنید')
     const { data, error } = await db.rpc('boostan_start_shift', { p_actor: user.id, p_product: b.productId, p_counter: n(b.counterStart), p_at: new Date().toISOString(), p_note: b.note || null }); if (error) throw error
     return json(data, 201)
   }
@@ -268,15 +279,28 @@ async function sales(req: Request, path: string, method: string, user: AppUser, 
     let returned:any[]=[]
     if(itemIds.length){const {data:ri,error:er}=await db.from('sale_return_items').select('sale_item_id,quantity').in('sale_item_id',itemIds);if(er)throw er;returned=ri||[]}
     const returnedMap=new Map<string,number>();for(const r of returned)returnedMap.set(r.sale_item_id,(returnedMap.get(r.sale_item_id)||0)+n(r.quantity))
-    return json({ ...mapSale(data), items: (items || []).map((x: any) => ({ id:x.id, productId: x.product_id, productName: x.products?.name, quantity: n(x.quantity), returnedQuantity:returnedMap.get(x.id)||0, availableReturnQuantity:n(x.quantity)-(returnedMap.get(x.id)||0), unitPrice: n(x.unit_price), lineTotal: n(x.line_total) })) })
+    const {data:initialPayment,error:initialError}=await db.from('payments').select('payment_method').eq('sale_id',id).limit(1).maybeSingle()
+    if(initialError)throw initialError
+    return json({ ...mapSale(data), paymentMethod:initialPayment?.payment_method||null, items: (items || []).map((x: any) => ({ id:x.id, productId: x.product_id, productName: x.products?.name, quantity: n(x.quantity), returnedQuantity:returnedMap.get(x.id)||0, availableReturnQuantity:n(x.quantity)-(returnedMap.get(x.id)||0), unitPrice: n(x.unit_price), lineTotal: n(x.line_total) })) })
   }
   if (method === 'POST' && path === '/sales') {
     const b = await body(req)
     const driverPhone = normalizeDigits(String(b.driverPhone || '').trim())
     if(driverPhone&&!/^\d{11}$/.test(driverPhone))return fail('شماره تماس راننده باید ۱۱ رقم باشد')
     if(b.driverVehicle&& !/^\d{2} [آ-ی] \d{3} - \d{2}$/.test(normalizeDigits(String(b.driverVehicle)).replace(/[ي]/g,'ی').replace(/[ك]/g,'ک')))return fail('فرمت پلاک ایران معتبر نیست')
+    if(b.duplicateOverride && user.role!=='MANAGER')return fail('تأیید فروش مشابه فقط توسط مدیر مجاز است',403)
     const { data, error } = await db.rpc('boostan_create_sale', { p_payload: {...b,driverPhone,driverVehicle: b.driverVehicle?normalizeDigits(String(b.driverVehicle)).replace(/[ي]/g,'ی').replace(/[ك]/g,'ک'):null}, p_actor: user.id }); if (error) throw error
     return json(data, 201)
+  }
+  if(method==='PUT' && id){
+    manager(user);const b=await body(req)
+    const {data,error}=await db.rpc('boostan_manager_edit_sale',{p_sale:id,p_payload:b,p_actor:user.id});if(error)throw error
+    return json(data)
+  }
+  if(method==='GET'&&path.match(/^\/sales\/[0-9a-f-]+\/edits$/i)){
+    manager(user);const saleId=path.split('/')[2]
+    const {data,error}=await db.from('sale_edits').select('id,edited_at,reason,users(full_name),before_data,after_data').eq('sale_id',saleId).order('edited_at',{ascending:false}).limit(30)
+    if(error)throw error;return json(data||[])
   }
   return null
 }
@@ -289,7 +313,8 @@ async function payments(req: Request, path: string, method: string, user: AppUse
   }
   if (method === 'POST' && path === '/payments') {
     const b = await body(req)
-    const { data, error } = await db.rpc('boostan_create_payment', { p_customer: b.customerId, p_amount: n(b.amount), p_method: String(b.paymentMethod || 'CASH'), p_actor: user.id, p_paid_at: new Date().toISOString(), p_note: b.note || null }); if (error) throw error
+    if(!Number.isFinite(Number(normalizeDigits(b.amount))) || !Number.isFinite(Number(normalizeDigits(b.discountAmount ?? 0))) || n(b.amount)<0 || n(b.discountAmount)<0) return fail('مبلغ وصول یا تخفیف معتبر نیست')
+    const { data, error } = await db.rpc('boostan_payment_with_discount', { p_customer: b.customerId, p_amount: n(b.amount), p_discount: n(b.discountAmount), p_method: String(b.paymentMethod || 'CASH'), p_actor: user.id, p_note: b.note || null }); if (error) throw error
     return json(data, 201)
   }
   return null
@@ -308,6 +333,28 @@ async function inventory(req: Request, path: string, method: string, user: AppUs
   if (method === 'GET' && movementId) {
     const { data, error } = await db.from('inventory_transactions').select('id,product_id,transaction_type,quantity,reference_type,reference_id,occurred_at,note,users(full_name),products(name)').eq('product_id', movementId).order('occurred_at', { ascending: false }).limit(1000); if (error) throw error
     return json((data || []).map((x: any) => ({ id: x.id, productId: x.product_id, productName: x.products?.name, transactionType: x.transaction_type, quantity: n(x.quantity), referenceType: x.reference_type, referenceId: x.reference_id, occurredAt: x.occurred_at, note: x.note, operatorName: x.users?.full_name })))
+  }
+  if(method==='POST' && path==='/inventory/estimate'){
+    manager(user);const b=await body(req)
+    const raw=normalizeDigits(String(b.counter ?? ''))
+    if(!/^\d{7}$/.test(raw))return fail('کانتر باید دقیقاً هفت رقم باشد')
+    const defective=Number(normalizeDigits(b.defects ?? '0'))
+    if(!Number.isInteger(defective)||defective<0)return fail('تعداد معیوب باید عدد صحیح نامنفی باشد')
+    const {data:runs,error:er}=await db.from('v_shift_runs').select('*').is('end_counter',null).neq('status','FINALIZED').order('started_at',{ascending:false}).limit(5)
+    if(er)throw er
+    if(!runs?.length)return fail('شیفت فعالی با کانتر پایان ثبت‌نشده پیدا نشد')
+    if(runs.length>1)return fail('چند شیفت باز وجود دارد؛ ابتدا وضعیت شیفت‌ها را بررسی کنید')
+    const run=runs[0]; const current=Number(raw),gross=current-n(run.start_counter)
+    if(gross<0)return fail('کانتر فعلی از کانتر شروع کمتر است؛ احتمال دورزدن شمارنده را بررسی کنید')
+    if(gross>99999)return fail('اختلاف کانتر غیرعادی است؛ کانتر و شیفت را بررسی کنید')
+    if(defective>gross)return fail('تعداد معیوب از تولید ناخالص بیشتر است')
+    const {data:row,error:ei}=await db.from('v_inventory_stock').select('stock').eq('product_id',run.product_id).maybeSingle();if(ei)throw ei
+    if(!row)return fail('موجودی محصول پیدا نشد')
+    return json({productId:run.product_id,productName:run.product_name,operatorName:run.operator_name,
+      shiftName:run.shift_name,startedAt:run.started_at,asOf:new Date().toISOString(),startCounter:n(run.start_counter),
+      currentCounter:current,gross,defects:defective,estimatedGood:gross-defective,
+      postedStock:n(row.stock),estimatedStock:n(row.stock)+gross-defective,
+      note:'فقط برآورد است؛ به انبار و کانتر اصلی هیچ تراکنشی اضافه نشد. فرض: یک نوع محصول در این شیفت تولید شده و فروش‌ها قبلاً در موجودی ثبت شده‌اند.'})
   }
   if (method === 'POST' && path === '/inventory/adjustments') {
     manager(user); const b = await body(req)
@@ -482,34 +529,72 @@ async function users(req: Request, path: string, method: string, user: AppUser) 
   return null
 }
 
-async function dashboard(user: AppUser) {
+async function productAnalytics(user:AppUser,url:URL){
+ manager(user)
+ const from=url.searchParams.get('from')||new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+ const to=url.searchParams.get('to')||from
+ if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
+ const [performance,financeResponse,purchaseResponse,productsResponse]=await Promise.all([
+   db.rpc('boostan_product_performance',{p_from:`${from}T00:00:00+03:30`,p_to:`${to}T23:59:59.999+03:30`}),
+   financeSummary(user,url),
+   db.from('purchases').select('purchase_type,quantity,total_amount').in('purchase_type',['RAW_MATERIAL','USED_SCRAP']).gte('purchased_at',`${from}T00:00:00+03:30`).lte('purchased_at',`${to}T23:59:59.999+03:30`),
+   db.from('products').select('id,name,price,weight_kg,is_active').order('name'),
+ ])
+ if(performance.error||purchaseResponse.error||productsResponse.error)throw performance.error||purchaseResponse.error||productsResponse.error
+ const fin=await financeResponse.json()
+ const purchasedKg=(purchaseResponse.data||[]).reduce((s,x)=>s+n(x.quantity),0)
+ const materialPriceKg=purchasedKg>0?(purchaseResponse.data||[]).reduce((s,x)=>s+n(x.total_amount),0)/purchasedKg:null
+ const overheadPerKg=n(fin.productionKg)>0?(n(fin.allocatedExpense)+n(fin.grindingCost))/n(fin.productionKg):null
+ const byId=new Map((performance.data||[]).map((x:any)=>[x.product_id,x]))
+ const rows=(productsResponse.data||[]).map((p:any)=>{
+  const x:any=byId.get(p.id)||{}
+  const sold=n(x.sold_units),returned=n(x.return_units),netQty=sold-returned
+  const produced=n(x.produced_units),gross=n(x.gross_units),yieldRate=produced>0?gross/produced:null
+  const weight=n(p.weight_kg)
+  const unitCost=materialPriceKg!=null&&overheadPerKg!=null&&yieldRate!=null&&weight>0
+    ? weight*(materialPriceKg*yieldRate+overheadPerKg):null
+  const netRevenue=n(x.net_revenue),netCost=unitCost==null?null:netQty*unitCost
+  return {productId:p.id,productName:p.name,weightKg:weight,price:n(p.price),isActive:p.is_active,
+    soldUnits:sold,returnUnits:returned,netUnits:netQty,grossRevenue:n(x.gross_revenue),netRevenue,
+    producedUnits:produced,defectiveUnits:Math.max(0,gross-produced),materialPriceKg,overheadPerKg,
+    estimatedUnitCost:unitCost,estimatedGrossProfit:netCost==null?null:netRevenue-netCost,
+    estimatedUnitProfit:unitCost==null||netQty<=0?null:netRevenue/netQty-unitCost,
+    estimatedMarginPct:netCost==null||netRevenue<=0?null:100*(netRevenue-netCost)/netRevenue}
+ })
+ return json({from,to,rows,disclaimer:'این اعداد فقط برآورد وزنی‌اند: قیمت خرید مواد در بازه، سربار تخصیص‌یافته بر وزن تولید، و ضایعات ثبت‌شده هر محصول مبنا هستند. ارزش موجودی ابتدای دوره، ترکیب مواد نو/آسیابی، ضایعات بازیافتی و هزینه ماشین به تفکیک محصول ارزش‌گذاری قطعی نشده‌اند. تخفیف وصول مشتری به محصول خاص تخصیص نمی‌یابد؛ بنابراین سود و بهای تمام‌شده حسابداری قطعی نیستند.'})
+}
+
+async function dashboard(user: AppUser,url:URL) {
   manager(user)
-  const since = new Date(Date.now() - 30 * 86400000).toISOString()
+  const from=url.searchParams.get('from')||new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+  const to=url.searchParams.get('to')||from
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
+  const fromIso=`${from}T00:00:00+03:30`,toIso=`${to}T23:59:59.999+03:30`,endExclusive=`${to}T23:59:59.999+03:30`
   const recentSince=new Date(Date.now()-50*60*60*1000).toISOString()
-  const todayTehran = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
-  const monthStart=new Date();monthStart.setUTCDate(1);monthStart.setUTCHours(0,0,0,0)
-  const [{data:prod,error:ep},{data:salesData,error:es},{data:inv,error:ei},{data:materialsData,error:em},{data:debt,error:ed},{data:acts,error:ea},{data:fin,error:ef}] = await Promise.all([
-    db.from('v_production_summary').select('quantity,gross_quantity,defects,production_at').gte('production_at', since),
-    db.from('v_sales_summary').select('subtotal,net_total,total_amount,sold_at').gte('sold_at', since),
-    db.from('v_inventory_stock').select('*'),db.from('v_material_stock').select('*'),db.from('v_customer_balances').select('balance'),
+  const [{data:prod,error:ep},{data:salesData,error:es},{data:returnsData,error:ert},{data:snapshot,error:ess},{data:acts,error:ea},{data:fin,error:ef}] = await Promise.all([
+    db.from('v_production_summary').select('quantity,gross_quantity,defects,production_at').gte('production_at',fromIso).lte('production_at',toIso),
+    db.from('sales').select('subtotal,total_amount,sold_at').gte('sold_at',fromIso).lte('sold_at',toIso),
+    db.from('sale_returns').select('amount_reduction,returned_at').gte('returned_at',fromIso).lte('returned_at',toIso),
+    db.rpc('boostan_snapshot_at',{p_end:new Date(new Date(toIso).getTime()+1).toISOString()}),
     db.from('activity_logs').select('id,action,created_at,user_id,users(full_name)').gte('created_at',recentSince).order('created_at',{ascending:false}).limit(500),
-    db.from('financial_entries').select('direction,amount,cash_effect,occurred_at').eq('cash_effect',true).gte('occurred_at',monthStart.toISOString()).limit(3000),
+    db.from('financial_entries').select('direction,amount,cash_effect,occurred_at').eq('cash_effect',true).gte('occurred_at',fromIso).lte('occurred_at',toIso),
   ])
-  if(ep||es||ei||em||ed||ea||ef)throw ep||es||ei||em||ed||ea||ef
+  if(ep||es||ert||ess||ea||ef)throw ep||es||ert||ess||ea||ef
   const day=(iso:string)=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(iso))
-  const prodSeries=new Map<string,number>(),saleSeries=new Map<string,number>();for(const x of prod||[])prodSeries.set(day(x.production_at),(prodSeries.get(day(x.production_at))||0)+n(x.quantity));for(const x of salesData||[])saleSeries.set(day(x.sold_at),(saleSeries.get(day(x.sold_at))||0)+n(x.net_total??x.total_amount))
-  const todayProd=(prod||[]).filter(x=>day(x.production_at)===todayTehran),todaySalesRows=(salesData||[]).filter(x=>day(x.sold_at)===todayTehran),inventory=inv||[]
-  const grossProduction=todayProd.reduce((s,x)=>s+n(x.gross_quantity),0),defects=todayProd.reduce((s,x)=>s+n(x.defects),0),raw=(materialsData||[]).find(x=>x.code==='RAW-READY'),scrap=(materialsData||[]).find(x=>x.code==='SCRAP-GRIND')
+  const prodSeries=new Map<string,number>(),saleSeries=new Map<string,number>()
+  for(const x of prod||[])prodSeries.set(day(x.production_at),(prodSeries.get(day(x.production_at))||0)+n(x.quantity))
+  for(const x of salesData||[])saleSeries.set(day(x.sold_at),(saleSeries.get(day(x.sold_at))||0)+n(x.total_amount))
+  for(const x of returnsData||[])saleSeries.set(day(x.returned_at),(saleSeries.get(day(x.returned_at))||0)-n(x.amount_reduction))
+  const grossProduction=(prod||[]).reduce((s,x)=>s+n(x.gross_quantity),0),defects=(prod||[]).reduce((s,x)=>s+n(x.defects),0)
   const cashIn=(fin||[]).filter(x=>x.direction==='IN').reduce((a,x)=>a+n(x.amount),0),cashOut=(fin||[]).filter(x=>x.direction==='OUT').reduce((a,x)=>a+n(x.amount),0)
-  return json({
-    todayProduction:todayProd.reduce((s,x)=>s+n(x.quantity),0),todayGrossProduction:grossProduction,todayDefects:defects,todayDefectRate:grossProduction>0?defects/grossProduction*100:0,
-    todayGrossSales:todaySalesRows.reduce((s,x)=>s+n(x.subtotal),0),todaySales:todaySalesRows.reduce((s,x)=>s+n(x.net_total??x.total_amount),0),
-    rawMaterialReadyKg:n(raw?.stock_kg),grindableScrapKg:n(scrap?.stock_kg),inventoryProductCount:inventory.length,inventoryValue:inventory.reduce((s,x)=>s+n(x.stock)*n(x.price),0),
-    customerDebt:(debt||[]).reduce((s,x)=>s+Math.max(0,n(x.balance)),0),lowStockCount:inventory.filter(x=>n(x.stock)<=n(x.minimum_stock)).length,
+  return json({from,to,todayProduction:(prod||[]).reduce((s,x)=>s+n(x.quantity),0),todayGrossProduction:grossProduction,
+    todayDefects:defects,todayDefectRate:grossProduction>0?defects/grossProduction*100:0,
+    todayGrossSales:(salesData||[]).reduce((s,x)=>s+n(x.subtotal),0),todaySales:(salesData||[]).reduce((s,x)=>s+n(x.total_amount),0)-(returnsData||[]).reduce((s,x)=>s+n(x.amount_reduction),0),
+    inventoryValue:n(snapshot?.inventoryValue),customerDebt:n(snapshot?.customerDebt),rawMaterialReadyKg:n(snapshot?.rawMaterialReadyKg),grindableScrapKg:n(snapshot?.grindableScrapKg),
     monthCashIn:cashIn,monthCashOut:cashOut,monthNetCashFlow:cashIn-cashOut,
-    productionSeries:[...prodSeries.entries()].map(([date,total])=>({date,total})).sort((a,b)=>a.date.localeCompare(b.date)),salesSeries:[...saleSeries.entries()].map(([date,total])=>({date,total})).sort((a,b)=>a.date.localeCompare(b.date)),
-    recentActivities:(acts||[]).map((x:any)=>({id:x.id,action:x.action,createdAt:x.created_at,userName:x.users?.full_name||null})),
-  })
+    productionSeries:[...prodSeries.entries()].map(([date,total])=>({date,total})).sort((a,b)=>a.date.localeCompare(b.date)),
+    salesSeries:[...saleSeries.entries()].map(([date,total])=>({date,total})).sort((a,b)=>a.date.localeCompare(b.date)),
+    recentActivities:(acts||[]).map((x:any)=>({id:x.id,action:x.action,createdAt:x.created_at,userName:x.users?.full_name||null}))})
 }
 
 function jalaliReportDate(key:string){
@@ -670,7 +755,8 @@ async function handler(req: Request) {
 
   const user = await authUser(req)
   if (method === 'GET' && path === '/auth/me') return json(user)
-  if (method === 'GET' && path === '/dashboard') return dashboard(user)
+  if (method === 'GET' && path === '/dashboard') return dashboard(user,url)
+  if (method === 'GET' && path === '/products/analytics') return productAnalytics(user,url)
   if (method === 'GET' && path === '/current-status') return currentStatus(user)
   if (method === 'GET' && path === '/finance/summary') return financeSummary(user,url)
   if (method === 'GET' && path === '/operations-ledger') return operationsLedger(user,url)

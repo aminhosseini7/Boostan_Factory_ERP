@@ -22,7 +22,7 @@ function detectServerField(text=''){
   return 'general';
 }
 
-export default function SaleEntry({products=[],customers=[],setCustomers,onSaved,busy,setBusy,setError,setOk}){
+export default function SaleEntry({products=[],customers=[],setCustomers,onSaved,busy,setBusy,setError,setOk,allowDuplicateOverride=false}){
   const [sale,setSale]=useState(blankSale);
   const [newCustomer,setNewCustomer]=useState({name:'',phone:'',address:''});
   const [savedCustomerId,setSavedCustomerId]=useState('');
@@ -33,6 +33,19 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
   const [showDriverInfo,setShowDriverInfo]=useState(false);
   const [includeSettled,setIncludeSettled]=useState(false);
   const submitting=useRef(false),creating=useRef(false),lastAdd=useRef(0);
+  const [duplicateCandidate,setDuplicateCandidate]=useState(null);
+  const requestRef=useRef({key:'',id:''});
+  const requestId=()=>globalThis.crypto?.randomUUID?.()||'00000000-0000-4000-8000-'+Math.random().toString(16).slice(2).padEnd(12,'0').slice(0,12);
+  async function confirmDuplicate(){if(!allowDuplicateOverride||!duplicateCandidate)return;
+    const reason=prompt('اگر این یک فروش مستقل واقعی است، علت ثبت فروش مشابه را بنویسید (حداقل ۵ حرف):');
+    if(!reason||reason.trim().length<5)return;
+    try{setBusy?.(true);setErrors({});setDuplicateCandidate(null);
+      await api.post('/sales',{...duplicateCandidate,duplicateOverride:true,overrideReason:reason.trim(),requestId:requestId()});
+      requestRef.current={key:'',id:''};setSale(blankSale());setNewCustomer({name:'',phone:'',address:''});setSavedCustomerId('');setPlateParts(blankPlate());setManualTotal(false);setShowDriverInfo(false);
+      setOk?.('فروش مستقل با تأیید مدیر ثبت شد.');await onSaved?.();
+    }catch(e){setErrors(v=>({...v,general:e.response?.data?.message||e.message}))}finally{setBusy?.(false)}
+  }
+
   const isCredit=sale.paymentType==='CREDIT';
   const subtotal=useMemo(()=>sale.items.reduce((sum,it)=>{
     const p=products.find(x=>x.id===it.productId);
@@ -91,12 +104,27 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
         customerPayableAmount:finalTotal,driverName:isCredit?(sale.driverName.trim()||undefined):undefined,
         driverPhone:isCredit?(driverPhone||undefined):undefined,driverVehicle:isCredit?(plateToString(plateParts)||undefined):undefined,
         note:sale.note.trim()||undefined,items:sale.items.map(x=>({productId:x.productId,quantity:toNumber(x.quantity)}))};
+      const key=JSON.stringify(payload);
+      if(requestRef.current.key!==key)requestRef.current={key,id:requestId()};
+      payload.requestId=requestRef.current.id;
+      setDuplicateCandidate(null);
       await api.post('/sales',payload);
+      requestRef.current={key:'',id:''};
       setSale(blankSale());setNewCustomer({name:'',phone:'',address:''});setSavedCustomerId('');
       setPlateParts(blankPlate());setManualTotal(false);setShowDriverInfo(false);lastAdd.current=0;
       setOk?.('فروش ثبت شد؛ تاریخ و ساعت توسط سیستم ذخیره شد.');
       try{await onSaved?.()}catch(_){setOk?.('فروش ثبت شد اما فهرست تازه‌سازی نشد؛ صفحه را دوباره باز کنید.')}
-    }catch(e){const msg=e?.response?.data?.message||e.message||'ثبت فروش انجام نشد';setErrors(v=>({...v,[detectServerField(msg)]:msg}))}
+    }catch(e){const msg=e?.response?.data?.message||e.message||'ثبت فروش انجام نشد';
+      if(allowDuplicateOverride&&msg.includes('این فروش کمتر از ۱۰ دقیقه پیش ثبت شده است')){
+        const candidate={paymentType:sale.paymentType,customerId:isCredit?sale.customerId:undefined,
+         paymentAmount:isCredit?toNumber(sale.paymentAmount):undefined,paymentMethod:isCredit&&toNumber(sale.paymentAmount)>0?sale.paymentMethod:undefined,
+         customerPayableAmount:finalTotal,driverName:isCredit?(sale.driverName.trim()||undefined):undefined,
+         driverPhone:isCredit?(cleanPhone(sale.driverPhone)||undefined):undefined,driverVehicle:isCredit?(plateToString(plateParts)||undefined):undefined,
+         note:sale.note.trim()||undefined,items:sale.items.map(x=>({productId:x.productId,quantity:toNumber(x.quantity)}))};
+        setDuplicateCandidate(candidate);
+      }
+      setErrors(v=>({...v,[detectServerField(msg)]:msg}));
+    }
     finally{submitting.current=false;setBusy?.(false)}
   }
   return <form className="panel operator-form" onSubmit={submit} noValidate>
@@ -113,6 +141,7 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
     {isCredit&&<div className="driver-section"><button type="button" className="ghost driver-toggle" onClick={()=>setShowDriverInfo(v=>!v)} aria-expanded={showDriverInfo}>{showDriverInfo?'−':'＋'} اطلاعات راننده</button>{showDriverInfo&&<div className="driver-box"><div className="form-grid"><label>نام راننده<input value={sale.driverName} onChange={e=>setSale(v=>({...v,driverName:e.target.value}))}/></label><label>شماره تماس راننده<input inputMode="numeric" maxLength={11} dir="ltr" className={errors.driverPhone?'field-invalid':''} placeholder="شماره تماس ۱۱ رقمی" value={sale.driverPhone} onChange={e=>{setSale(v=>({...v,driverPhone:cleanPhone(e.target.value)}));clearError('driverPhone')}}/>{showError(errors,'driverPhone')}</label><div className="plate-field-label"><span>پلاک خودرو (اختیاری)</span><IranPlateInput value={plateParts} onChange={v=>{setPlateParts(v);clearError('plate')}}/>{showError(errors,'plate')}</div></div></div>}</div>}
     <label>توضیحات<textarea value={sale.note} onChange={e=>setSale(v=>({...v,note:e.target.value}))}/></label>
     {showError(errors,'general')}
+    {allowDuplicateOverride&&duplicateCandidate&&<div className="warning"><b>فروش مشابه در ده دقیقه اخیر پیدا شد.</b><p>اگر مشتری واقعاً دوباره خرید کرده است، فقط مدیر می‌تواند با ثبت علت، فروش مستقل را ثبت کند.</p><button type="button" onClick={confirmDuplicate} disabled={busy}>ثبت مستقل با تأیید مدیر</button></div>}
     <button disabled={busy||customerBusy}>{busy?'در حال ثبت فروش…':'ثبت فروش'}</button>
   </form>;
 }
