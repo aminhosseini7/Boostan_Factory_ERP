@@ -8,40 +8,32 @@ export default function ProductAnalytics({ products = [] }) {
   const [loading, setLoading] = useState(false);
 
   async function calculateCosting() {
-    if (!selectedProduct) return;
+  if (!selectedProduct) return;
 
-    setLoading(true);
+  setLoading(true);
 
-    try {
-      const response = await api.get(
-        `/products/analytics?productId=${selectedProduct}&margin=${marginPct}`
-      );
+  try {
+    const response = await api.get(
+      `/products/analytics?productId=${selectedProduct}&margin=${marginPct}`
+    );
 
-      const data = response.data;
+    const data = response.data;
 
-      
-      console.log("COSTING RESPONSE:", data);
-      console.log("COSTING ERROR:", error);
+    console.log("COSTING RESPONSE:", data);
 
+    const row = (data.rows || []).find(
+      (item) => item.productId === selectedProduct
+    );
 
+    setResult(row || null);
 
-
-
-
-
-
-      const row = (data.rows || []).find(
-        (item) => item.productId === selectedProduct
-      );
-
-      setResult(row || null);
-    } catch (error) {
-      console.error("Costing error:", error);
-      setResult(null);
-    } finally {
-      setLoading(false);
-    }
+  } catch (error) {
+    console.error("Costing error:", error);
+    setResult(null);
+  } finally {
+    setLoading(false);
   }
+}
 
   return (
     <div className="panel">
