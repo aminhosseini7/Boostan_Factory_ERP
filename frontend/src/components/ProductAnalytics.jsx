@@ -14,17 +14,17 @@ export default function ProductAnalytics({ products = [] }) {
 
   try {
     const response = await api.get(
-  `/products/analytics?productId=${selectedProduct}&margin=${marginPct}&t=${Date.now()}`
-  );
+      `/products/analytics?productId=${selectedProduct}&margin=${marginPct}`
+    );
 
-console.log("MARGIN SENT:", marginPct);
+    console.log("MARGIN SENT:", marginPct);
 
     const data = response.data;
 
     console.log("COSTING RESPONSE:", data);
 
     const row = (data.rows || []).find(
-      (item) => item.productId === selectedProduct
+      (item) => String(item.productId) === String(selectedProduct)
     );
 
     setResult(row || null);
@@ -32,6 +32,7 @@ console.log("MARGIN SENT:", marginPct);
   } catch (error) {
     console.error("Costing error:", error);
     setResult(null);
+
   } finally {
     setLoading(false);
   }

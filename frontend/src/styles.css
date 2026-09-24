@@ -98,3 +98,19 @@
 
 /* Small typography adjustment requested for the existing manager menu. */
 .sidebar .manager-more-toggle{font-size:12.5px;}
+
+
+/* Horizontal scroll for wide tables */
+.table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.table-scroll table {
+  min-width: 900px;
+  width: max-content;
+}
