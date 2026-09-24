@@ -248,10 +248,11 @@ async function sales(req: Request, path: string, method: string, user: AppUser, 
     // Server-side filters allow finding an older invoice for a return without
     // loading every sale into a mobile browser. 'since' is used only for the
     // manager's recent sales panel; return search deliberately omits it.
-    const since=url.searchParams.get('since'),from=url.searchParams.get('from'),to=url.searchParams.get('to')
+    const since=url.searchParams.get('since'),from=url.searchParams.get('from'),to=url.searchParams.get('to'),enteredBy=url.searchParams.get('enteredBy')
     const search=normalizeDigits(url.searchParams.get('q')||'').trim()
     let q=db.from('v_sales_summary').select('*').order('sold_at',{ascending:false}).limit(150)
     if(user.role!=='MANAGER')q=q.eq('operator_id',user.id)
+    if(enteredBy) q=q.eq('entered_by', enteredBy)
     if(since){if(!Number.isFinite(Date.parse(since)))return fail('زمان شروع جستجو معتبر نیست');q=q.gte('sold_at',new Date(since).toISOString())}
     if(from){if(!/^\d{4}-\d{2}-\d{2}$/.test(from))return fail('تاریخ شروع جستجو معتبر نیست');q=q.gte('sold_at',`${from}T00:00:00+03:30`)}
     if(to){if(!/^\d{4}-\d{2}-\d{2}$/.test(to))return fail('تاریخ پایان جستجو معتبر نیست');q=q.lte('sold_at',`${to}T23:59:59+03:30`)}

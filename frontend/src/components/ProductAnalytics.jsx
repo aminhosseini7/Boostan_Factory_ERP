@@ -14,8 +14,10 @@ export default function ProductAnalytics({ products = [] }) {
 
   try {
     const response = await api.get(
-      `/products/analytics?productId=${selectedProduct}&margin=${marginPct}`
-    );
+  `/products/analytics?productId=${selectedProduct}&margin=${marginPct}&t=${Date.now()}`
+  );
+
+console.log("MARGIN SENT:", marginPct);
 
     const data = response.data;
 
