@@ -217,8 +217,8 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
         {(preview.driverName||preview.driverPhone||preview.driverVehicle)&&<div style={{marginTop:8,fontSize:12}}>راننده: {[preview.driverName,preview.driverPhone,preview.driverVehicle].filter(Boolean).join(' — ')}</div>}
         {preview.payload.note&&<div style={{marginTop:8,fontSize:12,overflowWrap:'anywhere'}}>توضیحات: {preview.payload.note}</div>}
         <div style={{display:'flex',gap:8,marginTop:16}}>
-          <button type="button" className="ghost" ref={previewBackRef} disabled={busy} onClick={()=>setPreview(null)} style={{flex:1}}>بازگشت و اصلاح</button>
           <button type="button" data-final-sale="true" disabled={busy} onClick={confirmSale} style={{flex:1}}>{busy?'در حال ثبت…':'تأیید و ثبت نهایی'}</button>
+          <button type="button" className="ghost" ref={previewBackRef} disabled={busy} onClick={()=>setPreview(null)} style={{flex:1}}>بازگشت و اصلاح</button>
         </div>
       </div>
     </div>}
