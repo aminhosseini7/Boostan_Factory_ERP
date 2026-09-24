@@ -67,11 +67,19 @@ export default function Sales(){
  return x.quantity==null?'—':Number(x.quantity).toLocaleString('fa-IR');
 }
 
-function saleProducts(x){
- if(!x.productNames)return '—';
- return Array.isArray(x.productNames)
-   ? x.productNames.join('، ')
-   : String(x.productNames);
+function saleProductCodes(sale){
+  // Product names in the sales API and product codes in /products both
+  // refer to the current products catalog. Never guess when a name is ambiguous.
+  const names=Array.isArray(sale.productNames)
+    ? sale.productNames
+    : (sale.productNames ? [sale.productNames] : []);
+  if(!names.length)return '—';
+  return names.map(name=>{
+    const matches=products.filter(product=>product.name===name);
+    return matches.length===1 && String(matches[0].code??'').trim()
+      ? String(matches[0].code).trim()
+      : '—';
+  }).join('، ');
 }
 
  return <Page title="فروش">
@@ -108,14 +116,15 @@ function saleProducts(x){
  {sales.length===0?<Empty/>:
  <div className="report-table recent-scroll"><table>
  <thead><tr>
- <th>مشتری</th><th>نوع سبد</th><th>تعداد</th><th>مبلغ خالص</th><th>پرداخت</th>
+ <th>مشتری</th><th>کد سبد</th><th>تعداد</th><th>تخفیف (تومان)</th><th>مبلغ خالص</th><th>پرداخت</th>
  <th>ثبت‌کننده</th><th>اپراتور</th><th>وضعیت</th><th>زمان</th><th>اصلاح</th>
  </tr></thead>
  <tbody>
  {sales.map(x=><tr key={x.id}>
  <td>{x.customerName||'فروش نقدی'}</td>
- <td>{saleProducts(x)}</td>
+ <td title={Array.isArray(x.productNames)?x.productNames.join('، '):String(x.productNames||'')}>{saleProductCodes(x)}</td>
  <td>{saleQuantity(x)}</td>
+ <td>{Number(x.discountAmount??0).toLocaleString('fa-IR')}</td>
  <td>{formatToman(x.netTotal)}</td>
  <td>{paymentLabel[x.paymentType]||x.paymentType}</td>
  <td>{x.enteredByName||'-'}</td>
@@ -127,7 +136,7 @@ function saleProducts(x){
  </tbody></table></div>}
  </div>
 
-  {selected&&<ManagerSaleEditor saleId={selected} products={products}
+ {selected&&<ManagerSaleEditor saleId={selected} products={products}
  onClose={()=>setSelected('')}
  onSaved={async()=>{setSelected('');setOk('اصلاح شد');await load()}}/>}
 
