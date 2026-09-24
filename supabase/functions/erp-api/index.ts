@@ -705,13 +705,14 @@ async function productAnalytics(user:AppUser,url:URL){
     // charge a second grinding amount unless a separate non-overlapping source
     // is implemented and audited.
     const grindingCost=0
-    // Conservative estimate: no recycling credit is subtracted because
-    // recoverable yield and valuation are not provided by the single defect input.
-    // This is additional material per GOOD basket, not another full material cost.
-    const defectMaterialAllowance=isForecastRow
-      ? materialCost * (1 / saleableFraction - 1) : 0
+    // Factory assumption for this forecast: defective baskets return to the
+    // scrap inventory and retain their full MATERIAL value (not their overhead).
+    // Therefore do not gross up material cost for defective cycles; doing so
+    // would charge recoverable material to saleable baskets a second time.
+    // Unsuccessful cycles still consume capacity and increase overhead per good basket.
+    const defectMaterialAllowance=0
     const unitCost=isForecastRow
-      ? materialCost + defectMaterialAllowance + overheadCost
+      ? materialCost + overheadCost
       : n(c.final_unit_cost)>0?n(c.final_unit_cost):null
     const unitProfit=unitCost===null?null:n(p.price)-unitCost
     const grossProfit=unitCost===null?null:netRevenue-(netQty*unitCost)
@@ -752,7 +753,7 @@ async function productAnalytics(user:AppUser,url:URL){
   return json({
     from,to,rows,
     disclaimer:forecasting
-      ? 'برآورد تولید پیش از ساخت: ۲۶ روز کاری × ۲۳ ساعت مفید در روز، زمان تولید و نرخ معیوب انتخابی، همه هزینه‌های ثبت‌شده ماه شمسی جاری (شامل حقوق) به‌عنوان سربار. نرخ معیوب بر حسب درصد کل چرخه‌های تولید است و هزینه مواد و سربار چرخه‌های ناموفق روی سبدهای سالم سرشکن می‌شود. چون ارزش بازیافت مواد معیوب و درصد بازیافت معلوم نیست، اعتبار بازیافتی کسر نشده است؛ خروجی از این نظر محافظه‌کارانه است. هزینه سنگین از ماه ثبت، در مدت تعیین‌شده با افزایش ۴٪ در سهم هر ماه محاسبه شده است. هزینه‌های تاریخی تولید مبنای تقسیم نیستند؛ توقف‌های بیش از فرض و هزینه‌های ثبت‌نشده در این برآورد لحاظ نشده‌اند.'
+      ? 'برآورد تولید پیش از ساخت: ۲۶ روز کاری × ۲۳ ساعت مفید در روز، زمان تولید و نرخ معیوب انتخابی، همه هزینه‌های ثبت‌شده ماه شمسی جاری (شامل حقوق) به‌عنوان سربار. نرخ معیوب بر حسب درصد کل چرخه‌های تولید است. با فرض بازگشت کامل مواد معیوب و حفظ کل ارزش مواد در انبار ضایعات، هزینه اضافی مواد معیوب به سبدهای سالم تخصیص نمی‌یابد، ولی سربار چرخه‌های ناموفق بین سبدهای سالم سرشکن می‌شود. هزینه یا افت ارزش بازیافتِ محاسبه‌نشده و خطاهای احتمالی قیمت‌گذاری مواد آسیاب‌شده در این برآورد لحاظ نشده‌اند. هزینه سنگین از ماه ثبت، در مدت تعیین‌شده با افزایش ۴٪ در سهم هر ماه محاسبه شده است. هزینه‌های تاریخی تولید مبنای تقسیم نیستند؛ توقف‌های بیش از فرض و هزینه‌های ثبت‌نشده در این برآورد لحاظ نشده‌اند.'
       : 'بهای تمام‌شده از موتور استاندارد کارخانه محاسبه می‌شود: آخرین قیمت ماده مستقیم، سهم مواد آسیاب، هزینه تولید، سربار و ضایعات. این خروجی برای تصمیم‌گیری مدیریتی است و جایگزین ثبت حسابداری قطعی نیست.'
   })
 }
