@@ -62,10 +62,17 @@ export default function Sales(){
   finally{setSearching(false)}
  }
 
+ 
  function saleQuantity(x){
-  // Do not invent zero when the older API omits this field.
-  return x.totalQuantity==null?'—':Number(x.totalQuantity).toLocaleString('fa-IR');
- }
+ return x.quantity==null?'—':Number(x.quantity).toLocaleString('fa-IR');
+}
+
+function saleProducts(x){
+ if(!x.productNames)return '—';
+ return Array.isArray(x.productNames)
+   ? x.productNames.join('، ')
+   : String(x.productNames);
+}
 
  return <Page title="فروش">
  <ErrorBox error={error}/>
@@ -107,6 +114,7 @@ export default function Sales(){
  <tbody>
  {sales.map(x=><tr key={x.id}>
  <td>{x.customerName||'فروش نقدی'}</td>
+ <td>{saleProducts(x)}</td>
  <td>{saleQuantity(x)}</td>
  <td>{formatToman(x.netTotal)}</td>
  <td>{paymentLabel[x.paymentType]||x.paymentType}</td>
@@ -119,7 +127,7 @@ export default function Sales(){
  </tbody></table></div>}
  </div>
 
- {selected&&<ManagerSaleEditor saleId={selected} products={products}
+  {selected&&<ManagerSaleEditor saleId={selected} products={products}
  onClose={()=>setSelected('')}
  onSaved={async()=>{setSelected('');setOk('اصلاح شد');await load()}}/>}
 
