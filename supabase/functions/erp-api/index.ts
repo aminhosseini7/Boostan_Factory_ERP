@@ -550,12 +550,109 @@ async function users(req: Request, path: string, method: string, user: AppUser) 
   return null
 }
 
+// Forecasting for the manager-only product costing assistant. This deliberately
+// does not change the historical finance reports or the existing database views.
+const costingPersianMonthFormatter = new Intl.DateTimeFormat('en-US-u-ca-persian', {
+  timeZone: 'Asia/Tehran', year: 'numeric', month: 'numeric'
+})
+const COSTING_MONTH_SECONDS = 26 * 23 * 60 * 60 // 26 working days, 1h downtime per day
+
+function costingPersianMonthIndex(iso: string): number {
+  const date = new Date(iso)
+  if (!Number.isFinite(date.getTime())) throw new Error('تاریخ هزینه معتبر نیست')
+  const parts = costingPersianMonthFormatter.formatToParts(date)
+  const year = Number(parts.find(x => x.type === 'year')?.value)
+  const month = Number(parts.find(x => x.type === 'month')?.value)
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12)
+    throw new Error('ماه شمسی هزینه قابل تشخیص نیست')
+  return year * 12 + month - 1
+}
+
+function costingMonthLabel(index: number): string {
+  const month = index % 12 + 1
+  const year = Math.floor(index / 12)
+  return `${year}/${String(month).padStart(2, '0')}`
+}
+
+function costingExpensesForMonth(expenses: any[], currentMonthIndex: number) {
+  let normal = 0, heavy = 0, normalCount = 0, heavyCount = 0
+  for (const x of expenses) {
+    const start = costingPersianMonthIndex(String(x.expense_date))
+    const age = currentMonthIndex - start
+    if (age < 0) continue
+    const amount = Number(x.amount)
+    if (!Number.isFinite(amount) || amount < 0)
+      throw new Error('مبلغ هزینه ثبت‌شده معتبر نیست')
+    if (String(x.cost_type).toUpperCase() === 'HEAVY') {
+      const months = Number(x.allocation_months)
+      if (!Number.isInteger(months) || months < 1)
+        throw new Error('مدت سرشکن شدن هزینه سنگین معتبر نیست')
+      if (age < months) {
+        heavy += amount / months * Math.pow(1.04, age)
+        heavyCount++
+      }
+    } else if (age === 0) {
+      // ALL other expense categories (including SALARY) are overhead of this month.
+      normal += amount
+      normalCount++
+    }
+  }
+  return { normal, heavy, total: normal + heavy, normalCount, heavyCount }
+}
+
+async function costingReadExpenseRows(asOf: string): Promise<any[]> {
+  // Fetch every matching expense: default PostgREST row limits must not silently
+  // omit a part of the cost base, even after the factory accumulates many expenses.
+  const rows: any[] = []
+  const pageSize = 500
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await db.from('expenses')
+      .select('id,amount,cost_type,allocation_months,expense_date')
+      .lte('expense_date', asOf)
+      .order('expense_date', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + pageSize - 1)
+    if (error) throw error
+    rows.push(...(data || []))
+    if (!data || data.length < pageSize) break
+  }
+  return rows
+}
+
 async function productAnalytics(user:AppUser,url:URL){
   manager(user)
   const from=url.searchParams.get('from')||new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
   const to=url.searchParams.get('to')||from
+  const marginRaw = url.searchParams.get('margin') ?? '20'
+  const margin = Number(normalizeDigits(marginRaw))
+  if (!Number.isFinite(margin) || margin < 0 || margin >= 100)
+    return fail('حاشیه سود باید عددی از صفر تا کمتر از ۱۰۰ درصد باشد')
   if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
 
+  const selectedProductId = url.searchParams.get('productId')
+  const secondsRaw = url.searchParams.get('cycleSeconds')
+  const forecasting = secondsRaw !== null
+  // Optional for older deployed clients: missing defectPct means 0%, so the
+  // existing forecast API remains backward-compatible. The new UI requires it.
+  const defectPctRaw = url.searchParams.get('defectPct')
+  let defectPct = 0
+  let cycleSeconds = 0
+  if (forecasting) {
+    if (!selectedProductId || !/^[0-9a-f-]{36}$/i.test(selectedProductId))
+      return fail('برای برآورد تولید، محصول معتبر انتخاب کنید')
+    if (secondsRaw === '') return fail('زمان تولید هر سبد را وارد کنید')
+    cycleSeconds = Number(normalizeDigits(secondsRaw))
+    if (!Number.isFinite(cycleSeconds) || cycleSeconds <= 0 || cycleSeconds > 86400)
+      return fail('زمان تولید هر سبد باید عددی مثبت و حداکثر ۸۶۴۰۰ ثانیه باشد')
+    if (defectPctRaw !== null) {
+      if (defectPctRaw.trim() === '') return fail('نرخ معیوب را وارد کنید؛ صفر نیز معتبر است')
+      defectPct = Number(normalizeDigits(defectPctRaw))
+      if (!Number.isFinite(defectPct) || defectPct < 0 || defectPct >= 100)
+        return fail('نرخ معیوب باید بین صفر و کمتر از ۱۰۰ درصدِ کل تولید باشد')
+    }
+  }
+
+  // Preserve all existing performance/standard-material queries and response fields.
   const [performance,productsCostResponse,productsResponse]=await Promise.all([
     db.rpc('boostan_product_performance',{p_from:`${from}T00:00:00+03:30`,p_to:`${to}T23:59:59.999+03:30`}),
     db.from('v_final_product_standard_cost').select('*'),
@@ -567,17 +664,55 @@ async function productAnalytics(user:AppUser,url:URL){
 
   const costMap=new Map((productsCostResponse.data||[]).map((x:any)=>[x.product_id,x]))
   const byId=new Map((performance.data||[]).map((x:any)=>[x.product_id,x]))
+  if (forecasting && !(productsResponse.data || []).some((p:any) => p.id === selectedProductId))
+    return fail('محصول انتخاب‌شده پیدا نشد', 404)
+  const selectedCost: any = forecasting ? costMap.get(selectedProductId) : null
+  if (forecasting && (selectedCost?.material_cost == null))
+    return fail('هزینه مواد محصول مشخص نیست؛ اطلاعات خرید و ترکیب مواد را بررسی کنید')
+
+  // This monthly forecast is separate from the historical view. Its legacy
+  // overhead and production_cost MUST NOT be added: ALL /expenses entries,
+  // including wages, are already counted as monthly overhead below.
+  const asOf = new Date().toISOString()
+  const monthIndex = costingPersianMonthIndex(asOf)
+  const expenses = forecasting
+    ? costingExpensesForMonth(await costingReadExpenseRows(asOf), monthIndex)
+    : null
+  const capacity = forecasting ? Math.floor(COSTING_MONTH_SECONDS / cycleSeconds) : null
+  const saleableFraction = 1 - defectPct / 100
+  // Distribute the cost of unsuccessful cycles over saleable baskets.
+  // Monthly overhead already includes wages; never charge wages separately.
+  const forecastOverhead = forecasting && expenses
+    ? (expenses.total * cycleSeconds / COSTING_MONTH_SECONDS) / saleableFraction : null
+  // Capacities are approximate whole baskets; unit cost uses continuous time
+  // to preserve the previous exact 0%-defect forecast formula.
+  const goodCapacity = forecasting && capacity !== null ? Math.floor(capacity * saleableFraction) : null
+  const defectiveCapacity = forecasting && capacity !== null && goodCapacity !== null
+    ? capacity - goodCapacity : null
 
   const rows=(productsResponse.data||[]).map((p:any)=>{
     const x:any=byId.get(p.id)||{}
     const c:any=costMap.get(p.id)||{}
-
+    const isForecastRow = forecasting && p.id === selectedProductId
     const sold=n(x.sold_units)
     const returned=n(x.return_units)
     const netQty=sold-returned
     const netRevenue=n(x.net_revenue)
-
-    const unitCost=n(c.final_unit_cost)>0?n(c.final_unit_cost):null
+    const materialCost=n(c.material_cost)
+    const overheadCost=isForecastRow ? Number(forecastOverhead) : n(c.overhead_cost)
+    const productionCost=isForecastRow ? 0 : n(c.production_cost)
+    // Existing material-cost view already prices the raw/regrind mix. Do not
+    // charge a second grinding amount unless a separate non-overlapping source
+    // is implemented and audited.
+    const grindingCost=0
+    // Conservative estimate: no recycling credit is subtracted because
+    // recoverable yield and valuation are not provided by the single defect input.
+    // This is additional material per GOOD basket, not another full material cost.
+    const defectMaterialAllowance=isForecastRow
+      ? materialCost * (1 / saleableFraction - 1) : 0
+    const unitCost=isForecastRow
+      ? materialCost + defectMaterialAllowance + overheadCost
+      : n(c.final_unit_cost)>0?n(c.final_unit_cost):null
     const unitProfit=unitCost===null?null:n(p.price)-unitCost
     const grossProfit=unitCost===null?null:netRevenue-(netQty*unitCost)
 
@@ -588,20 +723,37 @@ async function productAnalytics(user:AppUser,url:URL){
       grossRevenue:n(x.gross_revenue), netRevenue,
       producedUnits:n(x.produced_units),
       defectiveUnits:Math.max(0,n(x.gross_units)-n(x.produced_units)),
-      materialCost:n(c.material_cost),
-      productionCost:n(c.production_cost),
-      overheadCost:n(c.overhead_cost),
+      materialCost, grindingCost, productionCost, overheadCost,
       estimatedUnitCost:unitCost,
       estimatedGrossProfit:grossProfit,
       estimatedUnitProfit:unitProfit,
       estimatedMarginPct:unitProfit===null||n(p.price)<=0?null:(unitProfit/n(p.price))*100,
-      suggestedSalePrice:n(c.suggested_sale_price)
+      suggestedSalePrice:unitCost===null?null:Math.ceil(unitCost / (1 - margin / 100)),
+      ...(isForecastRow ? {
+        costingMode:'CURRENT_MONTH_FORECAST',
+        productionSeconds:cycleSeconds,
+        defectPct,
+        estimatedMonthlyCapacity:capacity,
+        estimatedMonthlyGoodCapacity:goodCapacity,
+        estimatedMonthlyDefectCapacity:defectiveCapacity,
+        defectMaterialAllowance,
+        overheadPerCycleBeforeDefects:expenses ? expenses.total * cycleSeconds / COSTING_MONTH_SECONDS : null,
+        recyclingCreditApplied:0,
+        monthlyWorkingDays:26, productiveHoursPerDay:23,
+        monthlyOverhead:expenses?.total,
+        monthlyNormalExpenses:expenses?.normal,
+        monthlyHeavyAllocation:expenses?.heavy,
+        overheadExpenseCount:(expenses?.normalCount||0)+(expenses?.heavyCount||0),
+        expenseMonth:costingMonthLabel(monthIndex)
+      } : {})
     }
   })
 
   return json({
     from,to,rows,
-    disclaimer:'بهای تمام‌شده از موتور استاندارد کارخانه محاسبه می‌شود: آخرین قیمت ماده مستقیم، سهم مواد آسیاب، هزینه تولید، سربار و ضایعات. این خروجی برای تصمیم‌گیری مدیریتی است و جایگزین ثبت حسابداری قطعی نیست.'
+    disclaimer:forecasting
+      ? 'برآورد تولید پیش از ساخت: ۲۶ روز کاری × ۲۳ ساعت مفید در روز، زمان تولید و نرخ معیوب انتخابی، همه هزینه‌های ثبت‌شده ماه شمسی جاری (شامل حقوق) به‌عنوان سربار. نرخ معیوب بر حسب درصد کل چرخه‌های تولید است و هزینه مواد و سربار چرخه‌های ناموفق روی سبدهای سالم سرشکن می‌شود. چون ارزش بازیافت مواد معیوب و درصد بازیافت معلوم نیست، اعتبار بازیافتی کسر نشده است؛ خروجی از این نظر محافظه‌کارانه است. هزینه سنگین از ماه ثبت، در مدت تعیین‌شده با افزایش ۴٪ در سهم هر ماه محاسبه شده است. هزینه‌های تاریخی تولید مبنای تقسیم نیستند؛ توقف‌های بیش از فرض و هزینه‌های ثبت‌نشده در این برآورد لحاظ نشده‌اند.'
+      : 'بهای تمام‌شده از موتور استاندارد کارخانه محاسبه می‌شود: آخرین قیمت ماده مستقیم، سهم مواد آسیاب، هزینه تولید، سربار و ضایعات. این خروجی برای تصمیم‌گیری مدیریتی است و جایگزین ثبت حسابداری قطعی نیست.'
   })
 }
 

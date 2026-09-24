@@ -8,12 +8,14 @@ const numberFa = (value) => Number(value).toLocaleString('fa-IR', {
 export default function ProductAnalytics({ products = [] }) {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [secondsByProduct, setSecondsByProduct] = useState({});
+  const [defectPctByProduct, setDefectPctByProduct] = useState({});
   const [marginPct, setMarginPct] = useState('20');
   const [result, setResult] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
   const seconds = secondsByProduct[selectedProduct] ?? '';
+  const defectPct = defectPctByProduct[selectedProduct] ?? '';
 
   async function calculateCosting() {
     if (loading) return;
@@ -25,8 +27,13 @@ export default function ProductAnalytics({ products = [] }) {
     }
     const cycle = Number(seconds);
     const margin = Number(marginPct);
+    const defectiveRate = Number(defectPct);
     if (seconds === '' || !Number.isFinite(cycle) || cycle <= 0 || cycle > 86400) {
       setMessage('زمان تولید هر سبد باید عددی مثبت و حداکثر ۸۶۴۰۰ ثانیه باشد.');
+      return;
+    }
+    if (defectPct === '' || !Number.isFinite(defectiveRate) || defectiveRate < 0 || defectiveRate >= 100) {
+      setMessage('نرخ معیوب باید بین صفر و کمتر از ۱۰۰ درصدِ کل تولید باشد. اگر معیوب ندارید عدد صفر را وارد کنید.');
       return;
     }
     if (marginPct === '' || !Number.isFinite(margin) || margin < 0 || margin >= 100) {
@@ -37,7 +44,7 @@ export default function ProductAnalytics({ products = [] }) {
     setLoading(true);
     try {
       const response = await api.get('/products/analytics', {
-        params: { productId: selectedProduct, margin, cycleSeconds: cycle },
+        params: { productId: selectedProduct, margin, cycleSeconds: cycle, defectPct: defectiveRate },
       });
       const row = (response.data?.rows || []).find(
         (item) => String(item.productId) === String(selectedProduct)
@@ -98,6 +105,25 @@ export default function ProductAnalytics({ products = [] }) {
         </label>
 
         <label>
+          نرخ معیوب از کل تولید (%)
+          <input
+            type="number"
+            min="0"
+            max="99.99"
+            step="any"
+            inputMode="decimal"
+            value={defectPct}
+            disabled={!selectedProduct || loading}
+            placeholder="مثلاً 5 یا 0"
+            onChange={(e) => {
+              setDefectPctByProduct((prev) => ({ ...prev, [selectedProduct]: e.target.value }));
+              setResult(null);
+              setMessage('');
+            }}
+          />
+        </label>
+
+        <label>
           حاشیه سود هدف مدیر (%)
           <input
             type="number"
@@ -125,7 +151,10 @@ export default function ProductAnalytics({ products = [] }) {
         <>
           <p className="hint">
             ماه هزینه: {result.expenseMonth} (شمسی) | ظرفیت نظری ماهانه برای این سبد: {' '}
-            {numberFa(result.estimatedMonthlyCapacity)} عدد (۲۶ روز × ۲۳ ساعت مفید در روز).
+            {numberFa(result.estimatedMonthlyCapacity)} چرخه (۲۶ روز × ۲۳ ساعت مفید در روز).
+            {' '}نرخ معیوب فرضی: {numberFa(result.defectPct)}٪؛
+            {' '}سالم قابل فروش: {numberFa(result.estimatedMonthlyGoodCapacity)} عدد؛
+            {' '}معیوب مورد انتظار: {numberFa(result.estimatedMonthlyDefectCapacity)} عدد.
             سربار ماهانه: {numberFa(result.monthlyOverhead)} تومان؛ {' '}
             سهم عادی: {numberFa(result.monthlyNormalExpenses)}، {' '}
             سهم هزینه‌های سنگین با افزایش ۴٪ ماهانه: {numberFa(result.monthlyHeavyAllocation)} تومان.
@@ -139,9 +168,10 @@ export default function ProductAnalytics({ products = [] }) {
             <table style={{ minWidth: 750 }}>
               <thead>
                 <tr>
-                  <th>هزینه مواد (با ترکیب آسیاب)</th>
+                  <th>هزینه مواد هر چرخه (با ترکیب آسیاب)</th>
+                  <th>سهم مواد سبدهای معیوب در هر سبد سالم (بدون اعتبار بازیافت)</th>
                   <th>هزینه آسیاب مجزا</th>
-                  <th>سهم سربار (شامل حقوق)</th>
+                  <th>سهم سربار هر سبد سالم (شامل حقوق و معیوبی)</th>
                   <th>بهای تمام‌شده برآوردی</th>
                   <th>قیمت فروش پیشنهادی</th>
                 </tr>
@@ -149,6 +179,7 @@ export default function ProductAnalytics({ products = [] }) {
               <tbody>
                 <tr>
                   <td>{numberFa(result.materialCost)}</td>
+                  <td>{numberFa(result.defectMaterialAllowance)}</td>
                   <td>{numberFa(result.grindingCost)}</td>
                   <td>{numberFa(result.overheadCost)}</td>
                   <td>{numberFa(result.estimatedUnitCost)}</td>
@@ -160,6 +191,8 @@ export default function ProductAnalytics({ products = [] }) {
           <p className="hint">
             هزینه آسیاب مجزا فعلاً اضافه نمی‌شود؛ سهم آسیاب موجود در بهای ترکیبی مواد حفظ شده
             تا یک هزینه دوبار محاسبه نشود. همه هزینه‌های ثبت‌شده در منوی هزینه‌ها، از جمله حقوق، در سربار منظور می‌شوند.
+            نرخ معیوب، هزینه چرخه‌های ناموفق را بر تعداد سبدهای سالم تقسیم می‌کند. چون درصد بازیافت و ارزش قابل برگشت مواد مشخص نشده‌اند،
+            فعلاً هیچ اعتبار بازیافتی از هزینه مواد معیوب کسر نشده است؛ بنابراین این برآورد از این نظر محافظه‌کارانه است و هزینه بازیافت مستقل نیز محاسبه نمی‌شود.
           </p>
         </>
       )}
