@@ -34,16 +34,26 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
   const [includeSettled,setIncludeSettled]=useState(false);
   const submitting=useRef(false),creating=useRef(false),lastAdd=useRef(0);
   const [duplicateCandidate,setDuplicateCandidate]=useState(null);
+  const [preview,setPreview]=useState(null);
+  const previewBackRef=useRef(null);
   const requestRef=useRef({key:'',id:''});
   const requestId=()=>globalThis.crypto?.randomUUID?.()||'00000000-0000-4000-8000-'+Math.random().toString(16).slice(2).padEnd(12,'0').slice(0,12);
-  async function confirmDuplicate(){if(!allowDuplicateOverride||!duplicateCandidate)return;
+  async function confirmDuplicate(){
+    if(!allowDuplicateOverride||!duplicateCandidate||submitting.current||busy||customerBusy)return;
     const reason=prompt('اگر این یک فروش مستقل واقعی است، علت ثبت فروش مشابه را بنویسید (حداقل ۵ حرف):');
     if(!reason||reason.trim().length<5)return;
-    try{setBusy?.(true);setErrors({});setDuplicateCandidate(null);
-      await api.post('/sales',{...duplicateCandidate,duplicateOverride:true,overrideReason:reason.trim(),requestId:requestId()});
-      requestRef.current={key:'',id:''};setSale(blankSale());setNewCustomer({name:'',phone:'',address:''});setSavedCustomerId('');setPlateParts(blankPlate());setManualTotal(false);setShowDriverInfo(false);
-      setOk?.('فروش مستقل با تأیید مدیر ثبت شد.');await onSaved?.();
-    }catch(e){setErrors(v=>({...v,general:e.response?.data?.message||e.message}))}finally{setBusy?.(false)}
+    submitting.current=true;setBusy?.(true);setErrors({});
+    try{
+      const payload={...duplicateCandidate,duplicateOverride:true,overrideReason:reason.trim()};
+      const key=JSON.stringify(payload);
+      if(requestRef.current.key!==key)requestRef.current={key,id:requestId()};
+      await api.post('/sales',{...payload,requestId:requestRef.current.id});
+      requestRef.current={key:'',id:''};setDuplicateCandidate(null);
+      setSale(blankSale());setNewCustomer({name:'',phone:'',address:''});setSavedCustomerId('');setPlateParts(blankPlate());setManualTotal(false);setShowDriverInfo(false);
+      setOk?.('فروش مستقل با تأیید مدیر ثبت شد.');
+      try{await onSaved?.()}catch(_){setOk?.('فروش ثبت شد اما فهرست تازه‌سازی نشد؛ صفحه را دوباره باز کنید.')}
+    }catch(e){setErrors(v=>({...v,general:e.response?.data?.message||e.message||'ثبت فروش انجام نشد'}))}
+    finally{submitting.current=false;setBusy?.(false)}
   }
 
   const isCredit=sale.paymentType==='CREDIT';
@@ -54,6 +64,7 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
   useEffect(()=>{if(!manualTotal)setSale(v=>({...v,customerPayableAmount:subtotal>0?String(subtotal):''}))},[subtotal,manualTotal]);
   const finalTotal=toNumber(sale.customerPayableAmount);
   const discount=Math.max(0,subtotal-finalTotal);
+  useEffect(()=>{if(preview)previewBackRef.current?.focus()},[preview]);
   function clearError(key){setErrors(v=>{if(!v[key]&&!v.general)return v;const next={...v};delete next[key];delete next.general;return next})}
   function changeItem(id,key,val){setSale(v=>({...v,items:v.items.map(x=>x.id===id?{...x,[key]:val}:x)}));clearError('items')}
   function addItem(){
@@ -84,6 +95,7 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
     const errs={};
     if(isCredit&&!sale.customerId)errs.customerId='مشتری نسیه را انتخاب کنید یا مشتری جدید ثبت کنید.';
     if(!sale.items.length||sale.items.some(x=>!x.productId||!Number.isFinite(toNumber(x.quantity))||toNumber(x.quantity)<=0))errs.items='برای هر قلم، محصول و تعداد بیشتر از صفر را وارد کنید.';
+    if(sale.items.some(x=>x.productId&&!products.some(p=>p.id===x.productId)))errs.items='محصول انتخاب‌شده در فهرست فعلی موجود نیست؛ محصول را دوباره انتخاب کنید.';
     if(new Set(sale.items.map(x=>x.productId).filter(Boolean)).size!==sale.items.filter(x=>x.productId).length)errs.items='هر محصول را فقط یک‌بار انتخاب کنید؛ تعداد آن را در همان ردیف تغییر دهید.';
     if(sale.customerPayableAmount===''||finalTotal<0||finalTotal>subtotal)errs.customerPayableAmount='مبلغ نهایی فروش باید بین صفر و مبلغ محاسبه‌شده باشد.';
     if(isCredit&&(toNumber(sale.paymentAmount)<0||toNumber(sale.paymentAmount)>finalTotal))errs.paymentAmount='پیش‌پرداخت نمی‌تواند از مبلغ نهایی فروش بیشتر باشد.';
@@ -91,43 +103,56 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
     if(plateToString(plateParts)&&!isCompletePlate(plateParts))errs.plate='پلاک را کامل وارد کنید: ۲ رقم، حرف، ۳ رقم و کد شهر ۲ رقمی.';
     return errs;
   }
-  async function submit(e){
-    e.preventDefault();if(submitting.current||busy)return;
+  // Invoice review does not post a sale; only the final approval calls the API.
+  function submit(e){
+    e.preventDefault();if(preview||submitting.current||busy||customerBusy)return;
     setError?.(null);setOk?.('');const errs=validate();setErrors(errs);
     if(Object.keys(errs).length)return;
-    submitting.current=true;setBusy?.(true);
+    const driverPhone=cleanPhone(sale.driverPhone);
+    const payload={paymentType:sale.paymentType,customerId:isCredit?sale.customerId:undefined,
+      paymentAmount:isCredit?toNumber(sale.paymentAmount):undefined,
+      paymentMethod:isCredit&&toNumber(sale.paymentAmount)>0?sale.paymentMethod:undefined,
+      customerPayableAmount:finalTotal,driverName:isCredit?(sale.driverName.trim()||undefined):undefined,
+      driverPhone:isCredit?(driverPhone||undefined):undefined,driverVehicle:isCredit?(plateToString(plateParts)||undefined):undefined,
+      note:sale.note.trim()||undefined,items:sale.items.map(x=>({productId:x.productId,quantity:toNumber(x.quantity)}))};
+    const rows=sale.items.map(it=>{
+      const product=products.find(p=>p.id===it.productId);
+      const quantity=toNumber(it.quantity),unitPrice=Number(product?.price||0);
+      return {id:it.id,code:product?.code||'',name:product?.name||'محصول',quantity,unitPrice,total:quantity*unitPrice};
+    });
+    setDuplicateCandidate(null);
+    setPreview({payload,rows,subtotal,discount,createdAt:new Date().toISOString(),
+      customerName:isCredit?(customers.find(c=>c.id===sale.customerId)?.name||newCustomer.name.trim()||'مشتری انتخاب‌شده'):'فروش حضوری',
+      driverName:isCredit?sale.driverName.trim():'',driverPhone:isCredit?driverPhone:'',
+      driverVehicle:isCredit?plateToString(plateParts):''});
+  }
+  async function confirmSale(){
+    if(!preview||submitting.current||busy||customerBusy)return;
+    const approved=preview;
+    submitting.current=true;setBusy?.(true);setErrors({});setError?.(null);
     try{
-      const driverPhone=cleanPhone(sale.driverPhone);
-      const payload={paymentType:sale.paymentType,customerId:isCredit?sale.customerId:undefined,
-        paymentAmount:isCredit?toNumber(sale.paymentAmount):undefined,
-        paymentMethod:isCredit&&toNumber(sale.paymentAmount)>0?sale.paymentMethod:undefined,
-        customerPayableAmount:finalTotal,driverName:isCredit?(sale.driverName.trim()||undefined):undefined,
-        driverPhone:isCredit?(driverPhone||undefined):undefined,driverVehicle:isCredit?(plateToString(plateParts)||undefined):undefined,
-        note:sale.note.trim()||undefined,items:sale.items.map(x=>({productId:x.productId,quantity:toNumber(x.quantity)}))};
+      const payload={...approved.payload};
       const key=JSON.stringify(payload);
+      // Reuse this request ID after a network failure to avoid a duplicate sale.
       if(requestRef.current.key!==key)requestRef.current={key,id:requestId()};
       payload.requestId=requestRef.current.id;
-      setDuplicateCandidate(null);
       await api.post('/sales',payload);
       requestRef.current={key:'',id:''};
+      setPreview(null);
       setSale(blankSale());setNewCustomer({name:'',phone:'',address:''});setSavedCustomerId('');
       setPlateParts(blankPlate());setManualTotal(false);setShowDriverInfo(false);lastAdd.current=0;
-      setOk?.('فروش ثبت شد؛ تاریخ و ساعت توسط سیستم ذخیره شد.');
+      setOk?.('فروش پس از تأیید فاکتور ثبت شد؛ تاریخ و ساعت توسط سیستم ذخیره شد.');
       try{await onSaved?.()}catch(_){setOk?.('فروش ثبت شد اما فهرست تازه‌سازی نشد؛ صفحه را دوباره باز کنید.')}
-    }catch(e){const msg=e?.response?.data?.message||e.message||'ثبت فروش انجام نشد';
+    }catch(e){
+      const msg=e?.response?.data?.message||e.message||'ثبت فروش انجام نشد';
       if(allowDuplicateOverride&&msg.includes('این فروش کمتر از ۱۰ دقیقه پیش ثبت شده است')){
-        const candidate={paymentType:sale.paymentType,customerId:isCredit?sale.customerId:undefined,
-         paymentAmount:isCredit?toNumber(sale.paymentAmount):undefined,paymentMethod:isCredit&&toNumber(sale.paymentAmount)>0?sale.paymentMethod:undefined,
-         customerPayableAmount:finalTotal,driverName:isCredit?(sale.driverName.trim()||undefined):undefined,
-         driverPhone:isCredit?(cleanPhone(sale.driverPhone)||undefined):undefined,driverVehicle:isCredit?(plateToString(plateParts)||undefined):undefined,
-         note:sale.note.trim()||undefined,items:sale.items.map(x=>({productId:x.productId,quantity:toNumber(x.quantity)}))};
-        setDuplicateCandidate(candidate);
+        setDuplicateCandidate(approved.payload);
       }
+      setPreview(null);
       setErrors(v=>({...v,[detectServerField(msg)]:msg}));
-    }
-    finally{submitting.current=false;setBusy?.(false)}
+    }finally{submitting.current=false;setBusy?.(false)}
   }
-  return <form className="panel operator-form" onSubmit={submit} noValidate>
+  return <><form className="panel operator-form" onSubmit={submit} noValidate>
     <div className="form-grid"><label>نوع پرداخت<select value={sale.paymentType} onChange={e=>{const nextPaymentType=e.target.value;setSale(v=>({...v,paymentType:nextPaymentType,customerId:'',paymentAmount:'',driverName:nextPaymentType==='CREDIT'?v.driverName:'',driverPhone:nextPaymentType==='CREDIT'?v.driverPhone:'',}));if(nextPaymentType!=='CREDIT')setPlateParts(blankPlate());setShowDriverInfo(false);clearError('customerId')}}><option value="CASH">نقدی</option><option value="CARD">کارت / انتقال بانکی</option><option value="CREDIT">نسیه</option></select></label></div>
     {isCredit&&<div className="credit-box"><label>مشتری نسیه<select value={sale.customerId} className={errors.customerId?'field-invalid':''} onChange={e=>{setSale(v=>({...v,customerId:e.target.value}));clearError('customerId')}}><option value="">انتخاب مشتری</option>{customers.filter(x=>includeSettled||x.id===sale.customerId||x.hasDebt||Number(x.balance)>0).map(x=><option key={x.id} value={x.id}>{x.name}{x.phone?` — ${x.phone}`:''}</option>)}</select>{showError(errors,'customerId')}</label><label className="show-settled"><input type="checkbox" checked={includeSettled} onChange={e=>setIncludeSettled(e.target.checked)}/> نمایش مشتریان تسویه‌شده برای فروش نسیه جدید</label>
       <div className="new-customer-box"><b>مشتری نسیه جدید</b><label>نام مشتری<input value={newCustomer.name} className={errors.customerName?'field-invalid':''} placeholder="نام مشتری" onChange={e=>setCustomerField('name',e.target.value)}/>{showError(errors,'customerName')}</label><label>شماره تماس ۱۱ رقمی<input inputMode="numeric" dir="ltr" maxLength={11} className={errors.customerPhone?'field-invalid':''} placeholder="۰۹۱۲۳۴۵۶۷۸۹" value={newCustomer.phone} onChange={e=>setCustomerField('phone',cleanPhone(e.target.value))}/>{showError(errors,'customerPhone')}</label><button disabled={customerBusy||!!(savedCustomerId&&savedCustomerId===sale.customerId)} type="button" className="ghost" onClick={createCustomer}>{customerBusy?'در حال ثبت…':savedCustomerId===sale.customerId&&savedCustomerId?'مشتری ثبت شد':'ثبت مشتری'}</button>{savedCustomerId&&savedCustomerId===sale.customerId&&<div className="new-customer-confirm">شماره {newCustomer.phone} برای «{newCustomer.name}» ثبت و این مشتری انتخاب شده است.</div>}</div>
@@ -142,6 +167,60 @@ export default function SaleEntry({products=[],customers=[],setCustomers,onSaved
     <label>توضیحات<textarea value={sale.note} onChange={e=>setSale(v=>({...v,note:e.target.value}))}/></label>
     {showError(errors,'general')}
     {allowDuplicateOverride&&duplicateCandidate&&<div className="warning"><b>فروش مشابه در ده دقیقه اخیر پیدا شد.</b><p>اگر مشتری واقعاً دوباره خرید کرده است، فقط مدیر می‌تواند با ثبت علت، فروش مستقل را ثبت کند.</p><button type="button" onClick={confirmDuplicate} disabled={busy}>ثبت مستقل با تأیید مدیر</button></div>}
-    <button disabled={busy||customerBusy}>{busy?'در حال ثبت فروش…':'ثبت فروش'}</button>
-  </form>;
+    <button type="submit" disabled={busy||customerBusy||!!preview}>بررسی فاکتور</button>
+  </form>
+    {preview&&<div role="presentation" style={{position:'fixed',inset:0,zIndex:9999,background:'rgba(0,0,0,.65)',display:'flex',alignItems:'center',justifyContent:'center',padding:'12px',boxSizing:'border-box'}}>
+      <div role="dialog" aria-modal="true" aria-labelledby="sale-invoice-heading" dir="rtl"
+        onKeyDown={e=>{
+          if(e.key==='Escape'&&!busy&&!submitting.current){e.stopPropagation();setPreview(null)}
+          if(e.key==='Tab'&&!e.shiftKey&&e.target?.dataset?.finalSale==='true'){
+            e.preventDefault();previewBackRef.current?.focus();
+          }else if(e.key==='Tab'&&e.shiftKey&&e.target===previewBackRef.current){
+            e.preventDefault();e.currentTarget.querySelector('[data-final-sale]')?.focus();
+          }
+        }}
+        style={{width:'100%',maxWidth:520,maxHeight:'calc(100vh - 24px)',overflowY:'auto',boxSizing:'border-box',background:'#fff',color:'#222',borderRadius:12,padding:18,boxShadow:'0 14px 45px rgba(0,0,0,.3)',fontSize:13,lineHeight:1.8}}>
+        <div style={{textAlign:'center',borderBottom:'1px dashed #bbb',paddingBottom:10,marginBottom:12}}>
+          <h2 id="sale-invoice-heading" style={{fontSize:19,margin:'0 0 4px'}}>کارخانه سبدسازی بوستان</h2>
+          <div style={{fontWeight:600}}>پیش‌نمایش فاکتور فروش</div>
+          <small>هنوز فروشی ثبت نشده است؛ شماره فاکتور پس از ثبت صادر می‌شود.</small>
+        </div>
+        <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',marginBottom:8}}>
+          <span>زمان بررسی: {new Date(preview.createdAt).toLocaleString('fa-IR',{timeZone:'Asia/Tehran'})}</span>
+          <span>نوع پرداخت: {preview.payload.paymentType==='CREDIT'?'نسیه':preview.payload.paymentType==='CARD'?'کارت / انتقال بانکی':'نقدی'}</span>
+        </div>
+        <div style={{marginBottom:10}}>خریدار: <b>{preview.customerName}</b></div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12,textAlign:'right'}}>
+            <thead><tr style={{borderBottom:'1px solid #bbb'}}>
+              <th style={{padding:'6px 3px'}}>کد / سبد</th><th style={{padding:'6px 3px',whiteSpace:'nowrap'}}>تعداد</th>
+              <th style={{padding:'6px 3px',whiteSpace:'nowrap'}}>فی (تومان)</th><th style={{padding:'6px 3px',whiteSpace:'nowrap'}}>مبلغ (تومان)</th>
+            </tr></thead>
+            <tbody>{preview.rows.map(row=><tr key={row.id} style={{borderBottom:'1px solid #eee'}}>
+              <td style={{padding:'7px 3px'}}><b>{row.code||row.name}</b>{row.code&&row.name&&<div style={{fontSize:11,color:'#666'}}>{row.name}</div>}</td>
+              <td style={{padding:'7px 3px',whiteSpace:'nowrap'}}>{row.quantity.toLocaleString('fa-IR')}</td>
+              <td style={{padding:'7px 3px',whiteSpace:'nowrap'}}>{formatToman(row.unitPrice)}</td>
+              <td style={{padding:'7px 3px',whiteSpace:'nowrap'}}>{formatToman(row.total)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <div style={{borderTop:'1px dashed #bbb',marginTop:12,paddingTop:9}}>
+          <div style={{display:'flex',justifyContent:'space-between',gap:8}}><span>جمع قبل از تخفیف:</span><b>{formatToman(preview.subtotal)}</b></div>
+          <div style={{display:'flex',justifyContent:'space-between',gap:8}}><span>تخفیف فروش:</span><b>{formatToman(preview.discount)}</b></div>
+          <div style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:16,borderTop:'1px solid #ddd',marginTop:7,paddingTop:7}}><b>مبلغ نهایی:</b><b>{formatToman(preview.payload.customerPayableAmount)}</b></div>
+          {preview.payload.paymentType==='CREDIT'&&<>
+            <div style={{display:'flex',justifyContent:'space-between',gap:8}}><span>پیش‌پرداخت:</span><b>{formatToman(preview.payload.paymentAmount||0)}</b></div>
+            {Number(preview.payload.paymentAmount)>0&&<div>روش پیش‌پرداخت: {({CASH:'نقدی',CARD:'کارت',BANK_TRANSFER:'انتقال بانکی',CHECK:'چک',OTHER:'سایر'})[preview.payload.paymentMethod]||'—'}</div>}
+            <div style={{display:'flex',justifyContent:'space-between',gap:8}}><span>مانده نسیه:</span><b>{formatToman(Math.max(0,preview.payload.customerPayableAmount-(preview.payload.paymentAmount||0)))}</b></div>
+          </>}
+        </div>
+        {(preview.driverName||preview.driverPhone||preview.driverVehicle)&&<div style={{marginTop:8,fontSize:12}}>راننده: {[preview.driverName,preview.driverPhone,preview.driverVehicle].filter(Boolean).join(' — ')}</div>}
+        {preview.payload.note&&<div style={{marginTop:8,fontSize:12,overflowWrap:'anywhere'}}>توضیحات: {preview.payload.note}</div>}
+        <div style={{display:'flex',gap:8,marginTop:16}}>
+          <button type="button" className="ghost" ref={previewBackRef} disabled={busy} onClick={()=>setPreview(null)} style={{flex:1}}>بازگشت و اصلاح</button>
+          <button type="button" data-final-sale="true" disabled={busy} onClick={confirmSale} style={{flex:1}}>{busy?'در حال ثبت…':'تأیید و ثبت نهایی'}</button>
+        </div>
+      </div>
+    </div>}
+  </>;
 }
