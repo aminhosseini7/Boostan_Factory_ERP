@@ -463,39 +463,43 @@ function addMonthsKey(key:string,delta:number){const [y,m]=key.split('-').map(Nu
 
 async function financeSummary(user: AppUser, url: URL) {
   manager(user)
-  const from=url.searchParams.get('from')||`${new Date().getUTCFullYear()}-${String(new Date().getUTCMonth()+1).padStart(2,'0')}-01`
-  const to=url.searchParams.get('to')||new Date().toISOString().slice(0,10)
-  const fromIso=`${from}T00:00:00+03:30`,toIso=`${to}T23:59:59+03:30`
-  const [{data:prod,error:ep},{data:salesData,error:es},{data:purchases,error:epu},{data:expensesData,error:ee},{data:grind,error:eg},{data:productsData,error:epr}] = await Promise.all([
-    db.from('v_production_summary').select('product_id,product_name,quantity,production_at,weight_kg').gte('production_at',fromIso).lte('production_at',toIso),
-    db.from('v_sales_summary').select('id,total_amount,net_total,sold_at').gte('sold_at',fromIso).lte('sold_at',toIso),
-    db.from('purchases').select('total_amount,purchased_at').lte('purchased_at',toIso),
-    db.from('expenses').select('amount,cost_type,allocation_months,expense_date').lte('expense_date',toIso),
-    db.from('grinding_records').select('labor_cost,ground_at').gte('ground_at',fromIso).lte('ground_at',toIso),
-    db.from('products').select('id,name,weight_kg,price').eq('is_active',true).order('name'),
+  const tehranToday=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+  const from=url.searchParams.get('from')||`${tehranToday.slice(0,7)}-01`
+  const to=url.searchParams.get('to')||tehranToday
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
+  const fromIso=`${from}T00:00:00+03:30`,toIso=`${to}T23:59:59.999+03:30`
+  const [{data:prod,error:ep},{data:salesData,error:es},{data:returnsData,error:er},{data:materialsData,error:em},{data:cashData,error:ec},pnl] = await Promise.all([
+    db.from('v_production_summary').select('quantity,weight_kg,production_at').gte('production_at',fromIso).lte('production_at',toIso),
+    db.from('sales').select('subtotal,discount_amount,total_amount,sold_at').gte('sold_at',fromIso).lte('sold_at',toIso),
+    db.from('sale_returns').select('amount_reduction,returned_at').gte('returned_at',fromIso).lte('returned_at',toIso),
+    db.from('v_material_stock').select('*').order('name'),
+    db.from('financial_entries').select('direction,amount,cash_effect,occurred_at').eq('cash_effect',true).gte('occurred_at',fromIso).lte('occurred_at',toIso),
+    operationalProfitLoss(fromIso,toIso),
   ])
-  if(ep||es||epu||ee||eg||epr)throw ep||es||epu||ee||eg||epr
-  const firstMonth=monthKey(fromIso),lastMonth=monthKey(toIso)
-  const inRangeMonth=(k:string)=>k>=firstMonth&&k<=lastMonth
-  const purchaseCost=(purchases||[]).filter(x=>new Date(x.purchased_at)>=new Date(fromIso)&&new Date(x.purchased_at)<=new Date(toIso)).reduce((a,x)=>a+n(x.total_amount),0)
-  let allocatedExpense=0
-  for(const x of expensesData||[]){
-    const start=monthKey(x.expense_date), months=x.cost_type==='HEAVY'?Math.max(1,Number(x.allocation_months||1)):1, part=n(x.amount)/months
-    for(let i=0;i<months;i++){const k=addMonthsKey(start,i);if(inRangeMonth(k))allocatedExpense+=part}
-  }
-  const grindingCost=(grind||[]).reduce((a,x)=>a+n(x.labor_cost),0)
-  const totalCost=purchaseCost+allocatedExpense+grindingCost
+  if(ep||es||er||em||ec)throw ep||es||er||em||ec
   const productionUnits=(prod||[]).reduce((a,x)=>a+n(x.quantity),0)
   const productionKg=(prod||[]).reduce((a:any,x:any)=>a+n(x.quantity)*n(x.weight_kg),0)
-  const grossRevenue=(salesData||[]).reduce((a,x)=>a+n(x.total_amount),0)
-  const revenue=(salesData||[]).reduce((a,x)=>a+n(x.net_total??x.total_amount),0)
-  const avgCostPerUnit=productionUnits>0?totalCost/productionUnits:0
-  const avgCostPerKg=productionKg>0?totalCost/productionKg:0
-  const estimatedProductCosts=(productsData||[]).map(x=>({productId:x.id,productName:x.name,weightKg:n(x.weight_kg),salePrice:n(x.price),estimatedUnitCost:n(x.weight_kg)>0?avgCostPerKg*n(x.weight_kg):avgCostPerUnit,estimatedUnitMargin:n(x.price)-(n(x.weight_kg)>0?avgCostPerKg*n(x.weight_kg):avgCostPerUnit)}))
-  const {data:materialsData,error:em}=await db.from('v_material_stock').select('*').order('name');if(em)throw em
-  const {data:cashData,error:ec}=await db.from('financial_entries').select('direction,amount,cash_effect,occurred_at').eq('cash_effect',true).gte('occurred_at',fromIso).lte('occurred_at',toIso);if(ec)throw ec
-  const cashIn=(cashData||[]).filter(x=>x.direction==='IN').reduce((a,x)=>a+n(x.amount),0),cashOut=(cashData||[]).filter(x=>x.direction==='OUT').reduce((a,x)=>a+n(x.amount),0)
-  return json({from,to,productionUnits,productionKg,purchaseCost,allocatedExpense,grindingCost,totalCost,grossRevenue,revenue,estimatedProfit:revenue-totalCost,cashIn,cashOut,netCashFlow:cashIn-cashOut,avgCostPerUnit,avgCostPerKg,estimatedProductCosts,materials:(materialsData||[]).map(x=>({materialId:x.material_id,name:x.name,materialType:x.material_type,stockKg:n(x.stock_kg),minimumStockKg:n(x.minimum_stock_kg)}))})
+  const grossRevenue=(salesData||[]).reduce((a,x)=>a+n(x.subtotal),0)
+  const invoiceDiscounts=(salesData||[]).reduce((a,x)=>a+n(x.discount_amount),0)
+  const salesAfterInvoiceDiscount=(salesData||[]).reduce((a,x)=>a+n(x.total_amount),0)
+  const returnsAmount=(returnsData||[]).reduce((a,x)=>a+n(x.amount_reduction),0)
+  const salesAfterReturns=salesAfterInvoiceDiscount-returnsAmount
+  const revenue=salesAfterReturns-n(pnl.settlementDiscounts)
+  const grossProfit=revenue-n(pnl.materialCogs)
+  const operatingProfit=grossProfit-n(pnl.normalExpenses)-n(pnl.inventoryAdjustmentLoss)
+  const cashIn=(cashData||[]).filter(x=>x.direction==='IN').reduce((a,x)=>a+n(x.amount),0)
+  const cashOut=(cashData||[]).filter(x=>x.direction==='OUT').reduce((a,x)=>a+n(x.amount),0)
+  return json({
+    from,to,productionUnits,productionKg,grossRevenue,invoiceDiscounts,salesAfterInvoiceDiscount,returnsAmount,
+    settlementDiscounts:n(pnl.settlementDiscounts),revenue,
+    materialCogs:n(pnl.materialCogs),saleCogs:n(pnl.saleCogs),returnCogs:n(pnl.returnCogs),grossProfit,
+    normalExpenses:n(pnl.normalExpenses),inventoryAdjustmentLoss:n(pnl.inventoryAdjustmentLoss),operatingProfit,
+    heavyExpensesExcluded:n(pnl.heavyExpensesExcluded),estimatedCogs:n(pnl.estimatedCogs),estimatedCogsQty:n(pnl.estimatedCogsQty),estimatedShare:n(pnl.estimatedShare),
+    costingConfidence:pnl.costingConfidence,materialUnderflowQty:n(pnl.materialUnderflowQty),finishedUnderflowQty:n(pnl.finishedUnderflowQty),
+    openingBasisSource:pnl.openingBasisSource,method:'MOVING_WEIGHTED_AVERAGE_MATERIAL',
+    cashIn,cashOut,netCashFlow:cashIn-cashOut,
+    materials:(materialsData||[]).map(x=>({materialId:x.material_id,name:x.name,materialType:x.material_type,stockKg:n(x.stock_kg),minimumStockKg:n(x.minimum_stock_kg)}))
+  })
 }
 
 async function currentStatus(user: AppUser) {
@@ -832,6 +836,240 @@ async function productAnalytics(user:AppUser,url:URL){
   })
 }
 
+const COST_EPS = 1e-9
+
+type CostBucket = { qty: number; value: number; estimatedValue: number; estimatedQty: number }
+type CostRemoval = { value: number; estimatedValue: number; estimatedQty: number; unitCost: number; missingQty: number }
+
+function costBucket(map: Map<string, CostBucket>, id: string) {
+  let x = map.get(id)
+  if (!x) { x = { qty: 0, value: 0, estimatedValue: 0, estimatedQty: 0 }; map.set(id, x) }
+  return x
+}
+
+function bucketAverage(x: CostBucket) { return x.qty > COST_EPS && x.value > COST_EPS ? x.value / x.qty : 0 }
+function bucketEstimatedValueRatio(x: CostBucket) { return x.value > COST_EPS ? Math.max(0, Math.min(1, x.estimatedValue / x.value)) : 0 }
+function bucketEstimatedQtyRatio(x: CostBucket) { return x.qty > COST_EPS ? Math.max(0, Math.min(1, x.estimatedQty / x.qty)) : 0 }
+
+function addBucketCost(x: CostBucket, qty: number, value: number, estimatedValue = 0, estimatedQty = 0) {
+  if (qty <= 0) return
+  const safeValue=Math.max(0,value)
+  x.qty += qty
+  x.value += safeValue
+  x.estimatedValue += Math.max(0, Math.min(safeValue, estimatedValue))
+  x.estimatedQty += Math.max(0, Math.min(qty, estimatedQty))
+}
+
+function removeBucketCost(x: CostBucket, qty: number, fallbackUnitCost: number): CostRemoval {
+  const requested = Math.max(0, qty)
+  if (requested <= COST_EPS) return { value: 0, estimatedValue: 0, estimatedQty: 0, unitCost: 0, missingQty: 0 }
+  const available = Math.min(requested, Math.max(0, x.qty))
+  const avg = bucketAverage(x)
+  const valueRatio = bucketEstimatedValueRatio(x)
+  const qtyRatio = bucketEstimatedQtyRatio(x)
+  const availableValue = available * avg
+  const availableEstimatedValue = availableValue * valueRatio
+  const availableEstimatedQty = available * qtyRatio
+  x.qty = Math.max(0, x.qty - available)
+  x.value = Math.max(0, x.value - availableValue)
+  x.estimatedValue = Math.max(0, x.estimatedValue - availableEstimatedValue)
+  x.estimatedQty = Math.max(0, x.estimatedQty - availableEstimatedQty)
+  if (x.qty <= COST_EPS) { x.qty = 0; x.value = 0; x.estimatedValue = 0; x.estimatedQty = 0 }
+  const missingQty = Math.max(0, requested - available)
+  const fallback = Math.max(0, fallbackUnitCost)
+  const missingValue = missingQty * fallback
+  const totalValue = availableValue + missingValue
+  const totalEstimatedValue = availableEstimatedValue + missingValue
+  const totalEstimatedQty = availableEstimatedQty + missingQty
+  return { value: totalValue, estimatedValue: totalEstimatedValue, estimatedQty: totalEstimatedQty, unitCost: requested > 0 ? totalValue / requested : 0, missingQty }
+}
+
+async function fetchAllRows<T = any>(queryFactory: () => any, hardLimit = 50000): Promise<T[]> {
+  const pageSize = 1000
+  const rows: T[] = []
+  for (let start = 0; start < hardLimit; start += pageSize) {
+    const { data, error } = await queryFactory().range(start, start + pageSize - 1)
+    if (error) throw error
+    const page = (data || []) as T[]
+    rows.push(...page)
+    if (page.length < pageSize) return rows
+  }
+  throw new Error(`Costing replay exceeded safety limit of ${hardLimit} rows`)
+}
+
+async function operationalProfitLoss(fromIso: string, toIso: string) {
+  const fromMs = new Date(fromIso).getTime(), toMs = new Date(toIso).getTime()
+  const inRange = (iso: string) => { const t = new Date(iso).getTime(); return t >= fromMs && t <= toMs }
+
+  const [materialTx, inventoryTx, purchaseRows, grindingRows, returnRows, standardRows, productRows, materialItems, normalExpenses, heavyExpenses, settlementRows] = await Promise.all([
+    fetchAllRows<any>(() => db.from('material_transactions').select('id,material_id,transaction_type,quantity_kg,unit_cost,reference_type,reference_id,occurred_at,created_at').lte('occurred_at', toIso).order('occurred_at',{ascending:true}).order('created_at',{ascending:true}).order('id',{ascending:true})),
+    fetchAllRows<any>(() => db.from('inventory_transactions').select('id,product_id,transaction_type,quantity,reference_type,reference_id,occurred_at,created_at').lte('occurred_at', toIso).order('occurred_at',{ascending:true}).order('created_at',{ascending:true}).order('id',{ascending:true})),
+    fetchAllRows<any>(() => db.from('purchases').select('id,purchase_type,product_id,unit_price,purchased_at').lte('purchased_at', toIso).order('purchased_at',{ascending:true}).order('id',{ascending:true})),
+    fetchAllRows<any>(() => db.from('grinding_records').select('id,labor_cost,ground_at').lte('ground_at', toIso).order('ground_at',{ascending:true}).order('id',{ascending:true})),
+    fetchAllRows<any>(() => db.from('sale_returns').select('id,sale_id,returned_at').lte('returned_at', toIso).order('returned_at',{ascending:true}).order('id',{ascending:true})),
+    fetchAllRows<any>(() => db.from('v_final_product_standard_cost').select('product_id,material_cost')),
+    fetchAllRows<any>(() => db.from('products').select('id,weight_kg')),
+    fetchAllRows<any>(() => db.from('material_items').select('id,code')),
+    fetchAllRows<any>(() => db.from('expenses').select('amount,expense_date').eq('cost_type','NORMAL').gte('expense_date',fromIso).lte('expense_date',toIso).order('expense_date',{ascending:true})),
+    fetchAllRows<any>(() => db.from('expenses').select('amount,expense_date').eq('cost_type','HEAVY').gte('expense_date',fromIso).lte('expense_date',toIso).order('expense_date',{ascending:true})),
+    fetchAllRows<any>(() => db.from('settlement_discounts').select('amount,created_at').gte('created_at',fromIso).lte('created_at',toIso).order('created_at',{ascending:true})),
+  ])
+
+  const firstExactMaterialCost = new Map<string, number>()
+  for (const x of materialTx) {
+    const c = n(x.unit_cost)
+    if (x.transaction_type === 'PURCHASE' && c > 0 && !firstExactMaterialCost.has(x.material_id)) firstExactMaterialCost.set(x.material_id, c)
+  }
+
+  const materialStates = new Map<string, CostBucket>()
+  const materialLastKnown = new Map<string, number>()
+  const grindingById = new Map(grindingRows.map((x:any)=>[x.id,x]))
+  const grindingTransfer = new Map<string, { value:number; estimatedValue:number; estimatedQty:number; qty:number }>()
+  const shiftConsumption = new Map<string, { value:number; estimatedValue:number; estimatedQty:number; qty:number; unitCost:number }>()
+  const shiftScrap = new Map<string, { value:number; estimatedValue:number; estimatedQty:number; qty:number }>()
+  let materialUnderflowQty = 0
+
+  for (const x of materialTx) {
+    const state = costBucket(materialStates, x.material_id)
+    const qty = n(x.quantity_kg)
+    const fallback = materialLastKnown.get(x.material_id) || firstExactMaterialCost.get(x.material_id) || bucketAverage(state)
+    if (x.transaction_type === 'PURCHASE') {
+      const exact=n(x.unit_cost)>0
+      const unit = n(x.unit_cost) || fallback
+      addBucketCost(state, qty, qty * unit, exact ? 0 : qty * unit, exact ? 0 : qty)
+      if (exact) materialLastKnown.set(x.material_id, n(x.unit_cost))
+    } else if (x.transaction_type === 'OPENING') {
+      const exact = n(x.unit_cost)
+      const unit = exact || fallback
+      addBucketCost(state, qty, qty * unit, exact > 0 ? 0 : qty * unit, exact > 0 ? 0 : qty)
+    } else if (x.transaction_type === 'ADJUSTMENT_IN') {
+      const avg=bucketAverage(state), unit = avg || fallback, value = qty * unit
+      if(avg>0)addBucketCost(state, qty, value, value*bucketEstimatedValueRatio(state), qty*bucketEstimatedQtyRatio(state))
+      else addBucketCost(state, qty, value, value, qty)
+    } else if (x.transaction_type === 'GRINDING_IN') {
+      const transfer = x.reference_id ? grindingTransfer.get(x.reference_id) : null
+      const labor = x.reference_id ? n(grindingById.get(x.reference_id)?.labor_cost) : 0
+      if (transfer && qty > 0) addBucketCost(state, qty, transfer.value + labor, transfer.estimatedValue, Math.min(qty,transfer.estimatedQty))
+      else {
+        const unit = bucketAverage(state) || fallback
+        addBucketCost(state, qty, qty * unit, qty * unit, qty)
+      }
+    } else if (x.transaction_type === 'PRODUCTION_SCRAP') {
+      const cons = x.reference_id ? shiftConsumption.get(x.reference_id) : null
+      if (cons && qty > 0) {
+        const value = qty * cons.unitCost
+        const valueRatio = cons.value > COST_EPS ? Math.max(0, Math.min(1, cons.estimatedValue / cons.value)) : 0
+        const qtyRatio = cons.qty > COST_EPS ? Math.max(0, Math.min(1, cons.estimatedQty / cons.qty)) : 1
+        const estimatedValue = value * valueRatio
+        const estimatedQty=qty*qtyRatio
+        addBucketCost(state, qty, value, estimatedValue, estimatedQty)
+        if (x.reference_id) shiftScrap.set(x.reference_id, { value, estimatedValue, estimatedQty, qty })
+      } else {
+        const unit = bucketAverage(state) || fallback
+        const value = qty * unit
+        addBucketCost(state, qty, value, value, qty)
+        if (x.reference_id) shiftScrap.set(x.reference_id, { value, estimatedValue:value, estimatedQty:qty, qty })
+      }
+    } else if (x.transaction_type === 'GRINDING_OUT' || x.transaction_type === 'PRODUCTION_CONSUMPTION' || x.transaction_type === 'ADJUSTMENT_OUT') {
+      const removed = removeBucketCost(state, qty, fallback)
+      materialUnderflowQty += removed.missingQty
+      if (x.transaction_type === 'GRINDING_OUT' && x.reference_id) grindingTransfer.set(x.reference_id, { value:removed.value, estimatedValue:removed.estimatedValue, estimatedQty:removed.estimatedQty, qty })
+      if (x.transaction_type === 'PRODUCTION_CONSUMPTION' && x.reference_id) shiftConsumption.set(x.reference_id, { value:removed.value, estimatedValue:removed.estimatedValue, estimatedQty:removed.estimatedQty, qty, unitCost:removed.unitCost })
+    }
+  }
+
+  const currentStandardCost = new Map(standardRows.map((x:any)=>[x.product_id,n(x.material_cost)]))
+  const rawReadyId = materialItems.find((x:any)=>x.code==='RAW-READY')?.id || null
+  const earliestRawUnitCost = rawReadyId ? (firstExactMaterialCost.get(rawReadyId) || 0) : 0
+  const standardCost = new Map<string,number>()
+  for(const p of productRows){
+    const historicalOpeningBasis=earliestRawUnitCost>0&&n(p.weight_kg)>0?n(p.weight_kg)*earliestRawUnitCost:0
+    standardCost.set(p.id,historicalOpeningBasis||currentStandardCost.get(p.id)||0)
+  }
+  const openingBasisSource=earliestRawUnitCost>0?'EARLIEST_RAW_PURCHASE':'CURRENT_STANDARD_FALLBACK'
+  const finishedPurchase = new Map(purchaseRows.filter((x:any)=>x.purchase_type==='FINISHED_PRODUCT').map((x:any)=>[x.id,n(x.unit_price)]))
+  const returnToSale = new Map(returnRows.map((x:any)=>[x.id,x.sale_id]))
+  const productStates = new Map<string, CostBucket>()
+  const saleUnitCost = new Map<string, { unitCost:number; estimatedValueRatio:number; estimatedQtyRatio:number }>()
+  let saleCogs = 0, returnCogs = 0, estimatedSaleCogs = 0, estimatedReturnCogs = 0
+  let estimatedSaleQty=0,estimatedReturnQty=0
+  let inventoryAdjustmentLoss = 0, estimatedAdjustmentLoss = 0, finishedUnderflowQty = 0
+
+  for (const x of inventoryTx) {
+    const state = costBucket(productStates, x.product_id)
+    const qty = n(x.quantity)
+    const fallback = standardCost.get(x.product_id) || bucketAverage(state)
+    if (x.transaction_type === 'OPENING') {
+      addBucketCost(state, qty, qty * fallback, qty * fallback, qty)
+    } else if (x.transaction_type === 'PRODUCTION') {
+      const cons = x.reference_id ? shiftConsumption.get(x.reference_id) : null
+      const scrap = x.reference_id ? shiftScrap.get(x.reference_id) : null
+      const value = cons ? Math.max(0, cons.value - (scrap?.value || 0)) : 0
+      const estimatedValue = cons ? Math.max(0, cons.estimatedValue - (scrap?.estimatedValue || 0)) : 0
+      const netMaterialQty=cons?Math.max(0,cons.qty-(scrap?.qty||0)):0
+      const netEstimatedQty=cons?Math.max(0,cons.estimatedQty-(scrap?.estimatedQty||0)):0
+      const estimatedQty=netMaterialQty>COST_EPS?qty*Math.max(0,Math.min(1,netEstimatedQty/netMaterialQty)):qty
+      if (qty > 0 && value > 0) addBucketCost(state, qty, value, estimatedValue, estimatedQty)
+      else addBucketCost(state, qty, qty * fallback, qty * fallback, qty)
+    } else if (x.transaction_type === 'ADJUSTMENT_IN') {
+      const exactPurchase = x.reference_type === 'PURCHASE' && x.reference_id ? finishedPurchase.get(x.reference_id) : null
+      if (exactPurchase != null && exactPurchase >= 0) addBucketCost(state, qty, qty * exactPurchase, 0, 0)
+      else {
+        const avg = bucketAverage(state), unit = avg || fallback, value = qty * unit
+        if(avg>0)addBucketCost(state, qty, value, value*bucketEstimatedValueRatio(state), qty*bucketEstimatedQtyRatio(state))
+        else addBucketCost(state, qty, value, value, qty)
+      }
+    } else if (x.transaction_type === 'SALE_RETURN') {
+      const saleId = x.reference_id ? returnToSale.get(x.reference_id) : null
+      const original = saleId ? saleUnitCost.get(`${saleId}:${x.product_id}`) : null
+      if (original) {
+        const value = qty * original.unitCost
+        const estimatedValue = value * original.estimatedValueRatio
+        const estimatedQty=qty*original.estimatedQtyRatio
+        addBucketCost(state, qty, value, estimatedValue, estimatedQty)
+        if (inRange(x.occurred_at)) { returnCogs += value; estimatedReturnCogs += estimatedValue; estimatedReturnQty+=estimatedQty }
+      } else {
+        const avg = bucketAverage(state), unit = avg || fallback, value = qty * unit
+        const estimatedValue = avg > 0 ? value * bucketEstimatedValueRatio(state) : value
+        const estimatedQty=avg>0?qty*bucketEstimatedQtyRatio(state):qty
+        addBucketCost(state, qty, value, estimatedValue, estimatedQty)
+        if (inRange(x.occurred_at)) { returnCogs += value; estimatedReturnCogs += estimatedValue; estimatedReturnQty+=estimatedQty }
+      }
+    } else if (x.transaction_type === 'SALE' || x.transaction_type === 'ADJUSTMENT_OUT') {
+      const removed = removeBucketCost(state, qty, fallback)
+      finishedUnderflowQty += removed.missingQty
+      if (x.transaction_type === 'SALE') {
+        if (x.reference_id) saleUnitCost.set(`${x.reference_id}:${x.product_id}`, {
+          unitCost:removed.unitCost,
+          estimatedValueRatio:removed.value > COST_EPS ? Math.max(0,Math.min(1,removed.estimatedValue/removed.value)) : (removed.estimatedQty>0?1:0),
+          estimatedQtyRatio:qty > COST_EPS ? Math.max(0,Math.min(1,removed.estimatedQty/qty)) : 0,
+        })
+        if (inRange(x.occurred_at)) { saleCogs += removed.value; estimatedSaleCogs += removed.estimatedValue; estimatedSaleQty+=removed.estimatedQty }
+      } else if (inRange(x.occurred_at)) {
+        inventoryAdjustmentLoss += removed.value
+        estimatedAdjustmentLoss += removed.estimatedValue
+      }
+    }
+  }
+
+  const materialCogs = Math.max(0, saleCogs - returnCogs)
+  const estimatedCogs = Math.max(0, estimatedSaleCogs - estimatedReturnCogs)
+  const estimatedCogsQty=Math.max(0,estimatedSaleQty-estimatedReturnQty)
+  const normalExpenseTotal = normalExpenses.reduce((s:any,x:any)=>s+n(x.amount),0)
+  const heavyExpenseExcluded = heavyExpenses.reduce((s:any,x:any)=>s+n(x.amount),0)
+  const settlementDiscounts = settlementRows.reduce((s:any,x:any)=>s+n(x.amount),0)
+  const hasUnderflow = materialUnderflowQty > COST_EPS || finishedUnderflowQty > COST_EPS
+  const estimatedShare = materialCogs > COST_EPS ? Math.max(0,Math.min(1,estimatedCogs/materialCogs)) : 0
+
+  return {
+    materialCogs, saleCogs, returnCogs, estimatedCogs, estimatedCogsQty, estimatedShare,
+    normalExpenses:normalExpenseTotal, heavyExpensesExcluded:heavyExpenseExcluded, settlementDiscounts,
+    inventoryAdjustmentLoss, estimatedAdjustmentLoss,
+    costingConfidence: hasUnderflow ? 'REVIEW' : estimatedCogsQty > COST_EPS ? 'ESTIMATED' : 'HIGH',
+    materialUnderflowQty, finishedUnderflowQty, openingBasisSource,
+  }
+}
+
 async function dashboard(user: AppUser,url:URL) {
   manager(user)
   const from=url.searchParams.get('from')||new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
@@ -839,13 +1077,14 @@ async function dashboard(user: AppUser,url:URL) {
   if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
   const fromIso=`${from}T00:00:00+03:30`,toIso=`${to}T23:59:59.999+03:30`,endExclusive=`${to}T23:59:59.999+03:30`
   const recentSince=new Date(Date.now()-50*60*60*1000).toISOString()
-  const [{data:prod,error:ep},{data:salesData,error:es},{data:returnsData,error:ert},{data:snapshot,error:ess},{data:acts,error:ea},{data:fin,error:ef}] = await Promise.all([
+  const [{data:prod,error:ep},{data:salesData,error:es},{data:returnsData,error:ert},{data:snapshot,error:ess},{data:acts,error:ea},{data:fin,error:ef},pnl] = await Promise.all([
     db.from('v_production_summary').select('quantity,gross_quantity,defects,production_at').gte('production_at',fromIso).lte('production_at',toIso),
     db.from('sales').select('subtotal,total_amount,sold_at').gte('sold_at',fromIso).lte('sold_at',toIso),
     db.from('sale_returns').select('amount_reduction,returned_at').gte('returned_at',fromIso).lte('returned_at',toIso),
     db.rpc('boostan_snapshot_at',{p_end:new Date(new Date(toIso).getTime()+1).toISOString()}),
     db.from('activity_logs').select('id,action,created_at,user_id,users(full_name)').gte('created_at',recentSince).order('created_at',{ascending:false}).limit(500),
     db.from('financial_entries').select('direction,amount,cash_effect,occurred_at').eq('cash_effect',true).gte('occurred_at',fromIso).lte('occurred_at',toIso),
+    operationalProfitLoss(fromIso,toIso),
   ])
   if(ep||es||ert||ess||ea||ef)throw ep||es||ert||ess||ea||ef
   const day=(iso:string)=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(iso))
@@ -855,11 +1094,23 @@ async function dashboard(user: AppUser,url:URL) {
   for(const x of returnsData||[])saleSeries.set(day(x.returned_at),(saleSeries.get(day(x.returned_at))||0)-n(x.amount_reduction))
   const grossProduction=(prod||[]).reduce((s,x)=>s+n(x.gross_quantity),0),defects=(prod||[]).reduce((s,x)=>s+n(x.defects),0)
   const cashIn=(fin||[]).filter(x=>x.direction==='IN').reduce((a,x)=>a+n(x.amount),0),cashOut=(fin||[]).filter(x=>x.direction==='OUT').reduce((a,x)=>a+n(x.amount),0)
+  const salesAfterReturns=(salesData||[]).reduce((s,x)=>s+n(x.total_amount),0)-(returnsData||[]).reduce((s,x)=>s+n(x.amount_reduction),0)
+  const pnlNetSales=salesAfterReturns-n(pnl.settlementDiscounts)
+  const grossProfit=pnlNetSales-n(pnl.materialCogs)
+  const operatingProfit=grossProfit-n(pnl.normalExpenses)-n(pnl.inventoryAdjustmentLoss)
   return json({from,to,todayProduction:(prod||[]).reduce((s,x)=>s+n(x.quantity),0),todayGrossProduction:grossProduction,
     todayDefects:defects,todayDefectRate:grossProduction>0?defects/grossProduction*100:0,
-    todayGrossSales:(salesData||[]).reduce((s,x)=>s+n(x.subtotal),0),todaySales:(salesData||[]).reduce((s,x)=>s+n(x.total_amount),0)-(returnsData||[]).reduce((s,x)=>s+n(x.amount_reduction),0),
+    todayGrossSales:(salesData||[]).reduce((s,x)=>s+n(x.subtotal),0),todaySales:salesAfterReturns,
     inventoryValue:n(snapshot?.inventoryValue),customerDebt:n(snapshot?.customerDebt),rawMaterialReadyKg:n(snapshot?.rawMaterialReadyKg),grindableScrapKg:n(snapshot?.grindableScrapKg),
     monthCashIn:cashIn,monthCashOut:cashOut,monthNetCashFlow:cashIn-cashOut,
+    profitLoss:{
+      netSales:pnlNetSales,materialCogs:n(pnl.materialCogs),grossProfit,normalExpenses:n(pnl.normalExpenses),
+      inventoryAdjustmentLoss:n(pnl.inventoryAdjustmentLoss),operatingProfit,settlementDiscounts:n(pnl.settlementDiscounts),
+      saleCogs:n(pnl.saleCogs),returnCogs:n(pnl.returnCogs),estimatedCogs:n(pnl.estimatedCogs),estimatedCogsQty:n(pnl.estimatedCogsQty),estimatedShare:n(pnl.estimatedShare),
+      heavyExpensesExcluded:n(pnl.heavyExpensesExcluded),costingConfidence:pnl.costingConfidence,
+      materialUnderflowQty:n(pnl.materialUnderflowQty),finishedUnderflowQty:n(pnl.finishedUnderflowQty),
+      openingBasisSource:pnl.openingBasisSource,method:'MOVING_WEIGHTED_AVERAGE_MATERIAL'
+    },
     productionSeries:[...prodSeries.entries()].map(([date,total])=>({date,total})).sort((a,b)=>a.date.localeCompare(b.date)),
     salesSeries:[...saleSeries.entries()].map(([date,total])=>({date,total})).sort((a,b)=>a.date.localeCompare(b.date)),
     recentActivities:(acts||[]).map((x:any)=>({id:x.id,action:x.action,createdAt:x.created_at,userName:x.users?.full_name||null}))})

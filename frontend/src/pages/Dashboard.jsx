@@ -83,6 +83,8 @@ export default function Dashboard(){
   const visibleActivities=showAllActivities?activities:activities.slice(0,8);
   const ready=!!d&&!busy;
   const periodLabel=activeRange?.label||'امروز';
+  const pnl=d?.profitLoss||null;
+  const pnlConfidence=pnl?.costingConfidence==='HIGH'?'بالا':pnl?.costingConfidence==='REVIEW'?'نیازمند بررسی داده':'برآوردی';
 
   return <Page title="داشبورد مدیریت" actions={<Link className="quick-sale-link" to="/sales">ثبت فروش سریع</Link>}>
     <style>{`
@@ -113,6 +115,8 @@ export default function Dashboard(){
       .boostan-dashboard .dashboard-activity-head h3{margin:0}
       .boostan-dashboard .dashboard-activity-head button{font-size:13px}
       .boostan-dashboard .dashboard-activity-table{margin-top:12px}
+      .boostan-dashboard .dashboard-pnl-note{margin:10px 0 0;padding:10px 12px;border-radius:9px;background:rgba(2,132,199,.07);border:1px solid rgba(2,132,199,.22)}
+      .boostan-dashboard .dashboard-pnl-warning{margin:10px 0 0;padding:10px 12px;border-radius:9px;background:#fff7ed;color:#9a3412;border:1px solid #fdba74}
       @media(max-width:1100px){.boostan-dashboard .dashboard-primary{grid-template-columns:repeat(2,minmax(0,1fr))}}
       @media(max-width:700px){.boostan-dashboard .dashboard-primary,.boostan-dashboard .dashboard-secondary{grid-template-columns:repeat(2,minmax(0,1fr))}}
       @media(max-width:440px){.boostan-dashboard .dashboard-primary,.boostan-dashboard .dashboard-secondary{grid-template-columns:1fr}}
@@ -131,7 +135,7 @@ export default function Dashboard(){
           <button type="button" onClick={()=>load(from,to,'بازه انتخابی')} disabled={busy}>{busy?'در حال بارگذاری…':'اعمال بازه'}</button>
         </div>
         {activeRange&&<p className="dashboard-active-period">آمار نمایش‌داده‌شده: {periodLabel} (از {activeRange.from} تا {activeRange.to})</p>}
-        <details className="dashboard-help"><summary>راهنمای شاخص‌ها و نحوه محاسبه بازه</summary><p className="hint">موجودی انبار و بدهی مشتریان، مانده در پایان روز آخر بازه هستند؛ فروش، تولید و جریان نقدی فقط مربوط به خود بازه‌اند. ارزش موجودی با قیمت فروش نمایش داده شده و بهای تمام‌شده آن نیست.</p></details>
+        <details className="dashboard-help"><summary>راهنمای شاخص‌ها و نحوه محاسبه بازه</summary><p className="hint">موجودی انبار و بدهی مشتریان، مانده در پایان روز آخر بازه هستند؛ فروش، تولید و جریان نقدی فقط مربوط به خود بازه‌اند. ارزش موجودی با قیمت فروش نمایش داده شده و بهای تمام‌شده آن نیست. سود و زیان عملیاتی، هزینه‌های سنگین (HEAVY) را کسر نمی‌کند؛ این پرداخت‌ها همچنان در جریان نقدی دیده می‌شوند.</p></details>
       </div>
 
       <ErrorBox error={error}/>
@@ -158,6 +162,20 @@ export default function Dashboard(){
         <div className="cards dashboard-secondary">
           <Card label="فروش ناخالص" value={formatToman(d.todayGrossSales)}/>
         </div>
+
+        {pnl&&<>
+          <h3 className="dashboard-section-title">سود و زیان عملیاتی بازه</h3>
+          <div className="cards dashboard-secondary">
+            <Card label="درآمد خالص عملیاتی" value={formatToman(pnl.netSales)} sub="پس از مرجوعی و تخفیف تسویه"/>
+            <Card label="بهای مواد کالای فروخته‌شده (COGS)" value={formatToman(pnl.materialCogs)} sub="میانگین موزون متحرک"/>
+            <Card label="سود ناخالص پس از مواد" value={formatToman(pnl.grossProfit)}/>
+            <Card label="هزینه‌های عادی دوره" value={formatToman(pnl.normalExpenses)} sub="فقط NORMAL"/>
+            <Card label="کسری/خروج اصلاحی موجودی" value={formatToman(pnl.inventoryAdjustmentLoss)}/>
+            <Card label="سود / زیان عملیاتی" value={formatToman(pnl.operatingProfit)} sub={`اطمینان بهای فروش: ${pnlConfidence}`}/>
+          </div>
+          <p className="dashboard-pnl-note hint">هزینه‌های سنگین این بازه ({formatToman(pnl.heavyExpensesExcluded)}) از سود و زیان عملیاتی کسر نشده‌اند و فقط اثر نقدی آن‌ها در بخش جریان نقدی باقی می‌ماند. تخفیف‌های زمان وصول ({formatToman(pnl.settlementDiscounts)}) از درآمد عملیاتی کسر شده‌اند.</p>
+          {pnl.costingConfidence!=='HIGH'&&<p className="dashboard-pnl-warning">{pnl.costingConfidence==='REVIEW'?`در بازسازی بهای موجودی، کسری تاریخی مشاهده شد (مواد: ${n(pnl.materialUnderflowQty)} کیلوگرم، محصول: ${n(pnl.finishedUnderflowQty)} عدد). عدد سود قابل استفاده است اما قبل از اتکا مدیریتی بهتر است سوابق موجودی بررسی شوند.`:`بخشی از COGS (${formatToman(pnl.estimatedCogs)}) به موجودی افتتاحیه یا ورودی‌های بدون بهای تاریخی دقیق وابسته است؛ بنابراین سود فعلاً برآوردی است و با گردش موجودی واقعی دقیق‌تر می‌شود.`}</p>}
+        </>}
 
         <h3 className="dashboard-section-title">موجودی در پایان بازه</h3>
         <div className="cards dashboard-secondary">
