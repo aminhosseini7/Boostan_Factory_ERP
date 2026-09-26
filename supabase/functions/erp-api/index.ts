@@ -619,6 +619,62 @@ async function costingReadExpenseRows(asOf: string): Promise<any[]> {
   return rows
 }
 
+const COSTING_OBSERVED_LOOKBACK_DAYS = 90
+const COSTING_MAX_OBSERVED_SHIFT_SECONDS = 12 * 60 * 60
+
+async function costingObservedProductionStats(productId:string){
+  const nowMs = Date.now()
+  const cutoffMs = nowMs - COSTING_OBSERVED_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+  // Pull one extra possible shift-length before the cutoff so the chronological
+  // chain remains intact near the boundary. A finalized run gets its end counter
+  // when the next shift starts, therefore the next run's started_at is the best
+  // persisted timestamp for the end of its counter interval.
+  const querySince = new Date(cutoffMs - COSTING_MAX_OBSERVED_SHIFT_SECONDS * 1000).toISOString()
+  const {data,error}=await db.from('shift_runs')
+    .select('id,product_id,gross_quantity,defects,started_at,status')
+    .gte('started_at',querySince)
+    .order('started_at',{ascending:true})
+    .limit(1000)
+  if(error)throw error
+
+  const runs:any[] = data || []
+  let finalizedRuns=0, timedRuns=0, grossUnits=0, defectUnits=0
+  let timedGrossUnits=0, timedSeconds=0
+  let latestObservedAt:string|null=null
+
+  for(let i=0;i<runs.length;i++){
+    const r:any=runs[i]
+    const startedMs=Date.parse(String(r.started_at||''))
+    if(r.product_id!==productId || r.status!=='FINALIZED' || !Number.isFinite(startedMs) || startedMs<cutoffMs)continue
+    const gross=n(r.gross_quantity), defects=n(r.defects)
+    if(gross<=0 || defects<0 || defects>gross)continue
+    finalizedRuns++
+    grossUnits+=gross
+    defectUnits+=defects
+    if(!latestObservedAt || startedMs>Date.parse(latestObservedAt))latestObservedAt=String(r.started_at)
+
+    const next:any=runs[i+1]
+    const nextStartedMs=next?.started_at?Date.parse(String(next.started_at)):NaN
+    if(!Number.isFinite(nextStartedMs))continue
+    const elapsedSeconds=(nextStartedMs-startedMs)/1000
+    if(elapsedSeconds<=0 || elapsedSeconds>COSTING_MAX_OBSERVED_SHIFT_SECONDS)continue
+    timedRuns++
+    timedGrossUnits+=gross
+    timedSeconds+=elapsedSeconds
+  }
+
+  const cycleSeconds=timedGrossUnits>0?timedSeconds/timedGrossUnits:null
+  const defectPct=grossUnits>0?(defectUnits/grossUnits)*100:null
+  const confidence=timedRuns>=6&&grossUnits>=1000?'HIGH':timedRuns>=3&&grossUnits>=300?'MEDIUM':'LOW'
+  return {
+    available:cycleSeconds!==null&&defectPct!==null,
+    cycleSeconds,defectPct,confidence,
+    lookbackDays:COSTING_OBSERVED_LOOKBACK_DAYS,
+    finalizedRuns,timedRuns,grossUnits,defectUnits,timedGrossUnits,
+    latestObservedAt
+  }
+}
+
 async function productAnalytics(user:AppUser,url:URL){
   manager(user)
   const from=url.searchParams.get('from')||new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
@@ -631,24 +687,31 @@ async function productAnalytics(user:AppUser,url:URL){
 
   const selectedProductId = url.searchParams.get('productId')
   const secondsRaw = url.searchParams.get('cycleSeconds')
-  const forecasting = secondsRaw !== null
-  // Optional for older deployed clients: missing defectPct means 0%, so the
-  // existing forecast API remains backward-compatible. The new UI requires it.
   const defectPctRaw = url.searchParams.get('defectPct')
+  const forecasting = Boolean(selectedProductId)
+  const manualForecast = forecasting && secondsRaw !== null
+  let observedStats:any = null
   let defectPct = 0
   let cycleSeconds = 0
   if (forecasting) {
     if (!selectedProductId || !/^[0-9a-f-]{36}$/i.test(selectedProductId))
       return fail('برای برآورد تولید، محصول معتبر انتخاب کنید')
-    if (secondsRaw === '') return fail('زمان تولید هر سبد را وارد کنید')
-    cycleSeconds = Number(normalizeDigits(secondsRaw))
-    if (!Number.isFinite(cycleSeconds) || cycleSeconds <= 0 || cycleSeconds > 86400)
-      return fail('زمان تولید هر سبد باید عددی مثبت و حداکثر ۸۶۴۰۰ ثانیه باشد')
-    if (defectPctRaw !== null) {
-      if (defectPctRaw.trim() === '') return fail('نرخ معیوب را وارد کنید؛ صفر نیز معتبر است')
+    if (manualForecast) {
+      if (secondsRaw === '') return fail('زمان تولید هر سبد را وارد کنید')
+      cycleSeconds = Number(normalizeDigits(secondsRaw))
+      if (!Number.isFinite(cycleSeconds) || cycleSeconds <= 0 || cycleSeconds > 86400)
+        return fail('زمان تولید هر سبد باید عددی مثبت و حداکثر ۸۶۴۰۰ ثانیه باشد')
+      if (defectPctRaw === null || defectPctRaw.trim() === '')
+        return fail('در سناریوی دستی نرخ معیوب را وارد کنید؛ صفر نیز معتبر است')
       defectPct = Number(normalizeDigits(defectPctRaw))
       if (!Number.isFinite(defectPct) || defectPct < 0 || defectPct >= 100)
         return fail('نرخ معیوب باید بین صفر و کمتر از ۱۰۰ درصدِ کل تولید باشد')
+    } else {
+      observedStats=await costingObservedProductionStats(selectedProductId)
+      if(!observedStats.available)
+        return fail('برای این محصول هنوز داده شیفت واقعی کافی برای محاسبه خودکار زمان تولید و نرخ معیوب وجود ندارد؛ پس از نهایی‌شدن حداقل یک شیفت متوالی دوباره محاسبه کنید یا موقتاً از سناریوی دستی استفاده کنید')
+      cycleSeconds=Number(observedStats.cycleSeconds)
+      defectPct=Number(observedStats.defectPct)
     }
   }
 
@@ -732,8 +795,17 @@ async function productAnalytics(user:AppUser,url:URL){
       suggestedSalePrice:unitCost===null?null:Math.ceil(unitCost / (1 - margin / 100)),
       ...(isForecastRow ? {
         costingMode:'CURRENT_MONTH_FORECAST',
+        costingInputMode:manualForecast?'MANUAL':'AUTO_OBSERVED',
         productionSeconds:cycleSeconds,
         defectPct,
+        observedLookbackDays:observedStats?.lookbackDays??null,
+        observedFinalizedRuns:observedStats?.finalizedRuns??null,
+        observedTimedRuns:observedStats?.timedRuns??null,
+        observedGrossUnits:observedStats?.grossUnits??null,
+        observedDefectUnits:observedStats?.defectUnits??null,
+        observedTimedGrossUnits:observedStats?.timedGrossUnits??null,
+        observedConfidence:observedStats?.confidence??null,
+        observedLatestAt:observedStats?.latestObservedAt??null,
         estimatedMonthlyCapacity:capacity,
         estimatedMonthlyGoodCapacity:goodCapacity,
         estimatedMonthlyDefectCapacity:defectiveCapacity,
@@ -753,7 +825,9 @@ async function productAnalytics(user:AppUser,url:URL){
   return json({
     from,to,rows,
     disclaimer:forecasting
-      ? 'برآورد تولید پیش از ساخت: ۲۶ روز کاری × ۲۳ ساعت مفید در روز، زمان تولید و نرخ معیوب انتخابی، همه هزینه‌های ثبت‌شده ماه شمسی جاری (شامل حقوق) به‌عنوان سربار. نرخ معیوب بر حسب درصد کل چرخه‌های تولید است. با فرض بازگشت کامل مواد معیوب و حفظ کل ارزش مواد در انبار ضایعات، هزینه اضافی مواد معیوب به سبدهای سالم تخصیص نمی‌یابد، ولی سربار چرخه‌های ناموفق بین سبدهای سالم سرشکن می‌شود. هزینه یا افت ارزش بازیافتِ محاسبه‌نشده و خطاهای احتمالی قیمت‌گذاری مواد آسیاب‌شده در این برآورد لحاظ نشده‌اند. هزینه سنگین از ماه ثبت، در مدت تعیین‌شده با افزایش ۴٪ در سهم هر ماه محاسبه شده است. هزینه‌های تاریخی تولید مبنای تقسیم نیستند؛ توقف‌های بیش از فرض و هزینه‌های ثبت‌نشده در این برآورد لحاظ نشده‌اند.'
+      ? (manualForecast
+        ? 'سناریوی دستی مدیریت: ۲۶ روز کاری × ۲۳ ساعت مفید در روز، زمان تولید و نرخ معیوب واردشده توسط مدیر و همه هزینه‌های ثبت‌شده ماه شمسی جاری (شامل حقوق) به‌عنوان سربار. این حالت برای سناریوسازی است و داده واقعی تولید را جایگزین نمی‌کند.'
+        : 'برآورد خودکار مدیریت: زمان متوسط مؤثر تولید از فاصله زمانی ثبت کانتر شروع این شیفت تا ثبت کانتر شروع شیفت بعد، به‌صورت وزنی بر تعداد تولید ناخالص در حداکثر ۹۰ روز اخیر محاسبه می‌شود؛ نرخ معیوب نیز از مجموع معیوب تقسیم بر مجموع تولید ناخالص همان سوابق واقعی به‌دست می‌آید. شیفت‌های با فاصله زمانی نامعتبر یا بیش از ۱۲ ساعت از محاسبه زمان حذف می‌شوند. ۲۶ روز کاری × ۲۳ ساعت مفید در روز و همه هزینه‌های ثبت‌شده ماه شمسی جاری (شامل حقوق) مبنای سربار ماهانه هستند. این خروجی برآورد مدیریتی است و بهای تاریخی حسابداری محسوب نمی‌شود.')
       : 'بهای تمام‌شده از موتور استاندارد کارخانه محاسبه می‌شود: آخرین قیمت ماده مستقیم، سهم مواد آسیاب، هزینه تولید، سربار و ضایعات. این خروجی برای تصمیم‌گیری مدیریتی است و جایگزین ثبت حسابداری قطعی نیست.'
   })
 }

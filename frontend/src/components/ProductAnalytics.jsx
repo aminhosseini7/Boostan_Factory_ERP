@@ -5,8 +5,15 @@ const numberFa = (value) => Number(value).toLocaleString('fa-IR', {
   maximumFractionDigits: 2,
 });
 
+const confidenceLabel = {
+  HIGH: 'بالا',
+  MEDIUM: 'متوسط',
+  LOW: 'کم',
+};
+
 export default function ProductAnalytics({ products = [] }) {
   const [selectedProduct, setSelectedProduct] = useState('');
+  const [manualMode, setManualMode] = useState(false);
   const [secondsByProduct, setSecondsByProduct] = useState({});
   const [defectPctByProduct, setDefectPctByProduct] = useState({});
   const [marginPct, setMarginPct] = useState('20');
@@ -25,27 +32,31 @@ export default function ProductAnalytics({ products = [] }) {
       setMessage('ابتدا محصول را انتخاب کنید.');
       return;
     }
-    const cycle = Number(seconds);
     const margin = Number(marginPct);
-    const defectiveRate = Number(defectPct);
-    if (seconds === '' || !Number.isFinite(cycle) || cycle <= 0 || cycle > 86400) {
-      setMessage('زمان تولید هر سبد باید عددی مثبت و حداکثر ۸۶۴۰۰ ثانیه باشد.');
-      return;
-    }
-    if (defectPct === '' || !Number.isFinite(defectiveRate) || defectiveRate < 0 || defectiveRate >= 100) {
-      setMessage('نرخ معیوب باید بین صفر و کمتر از ۱۰۰ درصدِ کل تولید باشد. اگر معیوب ندارید عدد صفر را وارد کنید.');
-      return;
-    }
     if (marginPct === '' || !Number.isFinite(margin) || margin < 0 || margin >= 100) {
       setMessage('حاشیه سود باید بین صفر و کمتر از ۱۰۰ درصد باشد.');
       return;
     }
 
+    const params = { productId: selectedProduct, margin };
+    if (manualMode) {
+      const cycle = Number(seconds);
+      const defectiveRate = Number(defectPct);
+      if (seconds === '' || !Number.isFinite(cycle) || cycle <= 0 || cycle > 86400) {
+        setMessage('زمان تولید هر سبد باید عددی مثبت و حداکثر ۸۶۴۰۰ ثانیه باشد.');
+        return;
+      }
+      if (defectPct === '' || !Number.isFinite(defectiveRate) || defectiveRate < 0 || defectiveRate >= 100) {
+        setMessage('نرخ معیوب باید بین صفر و کمتر از ۱۰۰ درصدِ کل تولید باشد. اگر معیوب ندارید عدد صفر را وارد کنید.');
+        return;
+      }
+      params.cycleSeconds = cycle;
+      params.defectPct = defectiveRate;
+    }
+
     setLoading(true);
     try {
-      const response = await api.get('/products/analytics', {
-        params: { productId: selectedProduct, margin, cycleSeconds: cycle, defectPct: defectiveRate },
-      });
+      const response = await api.get('/products/analytics', { params });
       const row = (response.data?.rows || []).find(
         (item) => String(item.productId) === String(selectedProduct)
       );
@@ -85,45 +96,6 @@ export default function ProductAnalytics({ products = [] }) {
         </label>
 
         <label>
-          زمان متوسط تولید هر سبد (ثانیه)
-          <input
-            type="number"
-            min="0.01"
-            max="86400"
-            step="any"
-            inputMode="decimal"
-            value={seconds}
-            disabled={!selectedProduct || loading}
-            placeholder="مثلاً 20"
-            onChange={(e) => {
-              const value = e.target.value;
-              setSecondsByProduct((prev) => ({ ...prev, [selectedProduct]: value }));
-              setResult(null);
-              setMessage('');
-            }}
-          />
-        </label>
-
-        <label>
-          نرخ معیوب از کل تولید (%)
-          <input
-            type="number"
-            min="0"
-            max="99.99"
-            step="any"
-            inputMode="decimal"
-            value={defectPct}
-            disabled={!selectedProduct || loading}
-            placeholder="مثلاً 5 یا 0"
-            onChange={(e) => {
-              setDefectPctByProduct((prev) => ({ ...prev, [selectedProduct]: e.target.value }));
-              setResult(null);
-              setMessage('');
-            }}
-          />
-        </label>
-
-        <label>
           حاشیه سود هدف مدیر (%)
           <input
             type="number"
@@ -135,24 +107,87 @@ export default function ProductAnalytics({ products = [] }) {
             onChange={(e) => {
               setMarginPct(e.target.value);
               setResult(null);
-              setMessage('');
             }}
           />
         </label>
 
-        <button type="button" onClick={calculateCosting} disabled={loading}>
-          {loading ? 'در حال محاسبه...' : 'محاسبه'}
+        <button type="button" onClick={calculateCosting} disabled={loading || !selectedProduct}>
+          {loading ? 'در حال محاسبه...' : 'محاسبه خودکار'}
         </button>
+
+        <button
+          type="button"
+          className="ghost"
+          disabled={loading}
+          onClick={() => {
+            setManualMode((value) => !value);
+            setResult(null);
+            setMessage('');
+          }}
+        >
+          {manualMode ? 'بازگشت به داده واقعی' : 'سناریوی دستی (اختیاری)'}
+        </button>
+
+        {manualMode && <>
+          <label>
+            زمان متوسط تولید هر سبد (ثانیه)
+            <input
+              type="number"
+              min="0.01"
+              max="86400"
+              step="any"
+              inputMode="decimal"
+              value={seconds}
+              disabled={!selectedProduct || loading}
+              placeholder="مثلاً 20"
+              onChange={(e) => {
+                const value = e.target.value;
+                setSecondsByProduct((prev) => ({ ...prev, [selectedProduct]: value }));
+                setResult(null);
+                setMessage('');
+              }}
+            />
+          </label>
+
+          <label>
+            نرخ معیوب از کل تولید (%)
+            <input
+              type="number"
+              min="0"
+              max="99.99"
+              step="any"
+              inputMode="decimal"
+              value={defectPct}
+              disabled={!selectedProduct || loading}
+              placeholder="مثلاً 5 یا 0"
+              onChange={(e) => {
+                setDefectPctByProduct((prev) => ({ ...prev, [selectedProduct]: e.target.value }));
+                setResult(null);
+                setMessage('');
+              }}
+            />
+          </label>
+        </>}
       </div>
+
+      <p className="hint">
+        حالت پیش‌فرض از داده واقعی شیفت‌ها استفاده می‌کند؛ نرخ معیوب از تولید ثبت‌شده و زمان متوسط مؤثر از فاصله ثبت کانتر شروع دو شیفت متوالی محاسبه می‌شود. سناریوی دستی فقط برای آزمون مدیریتی باقی مانده است.
+      </p>
 
       {message && <div className="error" role="alert">{message}</div>}
 
       {result && (
         <>
+          {result.costingInputMode === 'AUTO_OBSERVED' && <div className="success" role="status">
+            محاسبه خودکار از داده واقعی: زمان متوسط مؤثر {numberFa(result.productionSeconds)} ثانیه برای هر چرخه، نرخ معیوب {numberFa(result.defectPct)}٪، بر پایه {numberFa(result.observedFinalizedRuns)} شیفت نهایی‌شده در حداکثر {numberFa(result.observedLookbackDays)} روز اخیر. اطمینان داده: {confidenceLabel[result.observedConfidence] || 'نامشخص'}.
+          </div>}
+          {result.costingInputMode === 'MANUAL' && <div className="warning" role="status">
+            این نتیجه با سناریوی دستی مدیر محاسبه شده است و جایگزین آمار واقعی تولید نیست.
+          </div>}
           <p className="hint">
             ماه هزینه: {result.expenseMonth} (شمسی) | ظرفیت نظری ماهانه برای این سبد: {' '}
             {numberFa(result.estimatedMonthlyCapacity)} چرخه (۲۶ روز × ۲۳ ساعت مفید در روز).
-            {' '}نرخ معیوب فرضی: {numberFa(result.defectPct)}٪؛
+            {' '}نرخ معیوب مبنا: {numberFa(result.defectPct)}٪؛
             {' '}سالم قابل فروش: {numberFa(result.estimatedMonthlyGoodCapacity)} عدد؛
             {' '}معیوب مورد انتظار: {numberFa(result.estimatedMonthlyDefectCapacity)} عدد.
             سربار ماهانه: {numberFa(result.monthlyOverhead)} تومان؛ {' '}
