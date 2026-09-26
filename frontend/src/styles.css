@@ -114,3 +114,6 @@
   min-width: 900px;
   width: max-content;
 }
+/* 2026-09-26: shift cleaning + touch-friendly production tables */
+.cleaning-check{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid #cbd5e1;border-radius:9px;background:#f8fafc;color:#334155;cursor:pointer}.cleaning-check input{width:auto;min-width:18px;height:18px;margin:0}.production-table-scroll{max-height:62vh;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;overscroll-behavior:contain}.production-table{min-width:900px}.production-table th{position:sticky;top:0;z-index:1}.cleaning-status{text-align:center;font-size:18px;min-width:54px}
+:root[data-theme="dark"] .cleaning-check{background:#1e293b;color:#f8fafc;border-color:#475569}

@@ -1,0 +1,27 @@
+Boostan ERP update 2026-09-26 - local validation report
+
+Baseline: Boostan_Factory_ERP_Final (4).zip
+Confirmed byte-for-byte baseline matches before editing:
+- frontend/src/pages/OperatorPanel.jsx
+- frontend/src/pages/Production.jsx
+- frontend/src/styles.css
+- supabase/functions/erp-api/index.ts
+- supabase/migrations/202609220001_manager_controls.sql
+
+Checks executed in this environment:
+PASS - JSX syntax parse: OperatorPanel.jsx
+PASS - JSX syntax parse: Production.jsx
+PASS - TypeScript syntax parse: supabase/functions/erp-api/index.ts
+PASS - Existing backend unit tests: 4/4
+PASS - Static migration checks: new cleaning RPC present
+PASS - Static migration checks: 1405/07/05 mapped to 2026-09-27
+PASS - Static migration checks: hard stock rejection removed from create sale and manager edit sale
+PASS - Rotation boundary calculation: days 1-10 / 11-20 / 21-30 / repeat verified
+PASS - Jalali conversion: 2026-09-27 = 1405/07/05 in Asia/Tehran
+
+Not executed here:
+- PostgreSQL migration against the live Supabase database
+- Supabase Edge Function deployment
+- Full Vite production build with a clean Linux dependency install
+
+Do not claim deployment success until migration/deploy/build outputs are checked on the user's environment.

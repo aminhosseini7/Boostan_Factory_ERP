@@ -87,10 +87,10 @@ function mapSale(x: any) {
   return { id: x.id, customerId: x.customer_id, customerName: x.customer_name || null, operatorId: x.operator_id, operatorName: x.operator_name, enteredBy: x.entered_by, enteredByName: x.entered_by_name, subtotal: n(x.subtotal), discountAmount: n(x.discount_amount), totalAmount: n(x.total_amount), returnedAmount: n(x.returned_amount), netTotal: x.net_total == null ? n(x.total_amount) : n(x.net_total), paymentType: x.payment_type, paymentAmount: n(x.payment_amount), driverName: x.driver_name, driverPhone: x.driver_phone, driverVehicle: x.driver_vehicle, status: x.status || 'ACTIVE', note: x.note, soldAt: x.sold_at }
 }
 function mapProduction(x: any) {
-  return { id: x.id, productId: x.product_id, productName: x.product_name, operatorId: x.operator_id, operatorName: x.operator_name, quantity: n(x.quantity), grossQuantity: n(x.gross_quantity), defects: n(x.defects), shift: x.shift, productionAt: x.production_at, note: x.note, shiftRunId: x.shift_run_id }
+  return { id: x.id, productId: x.product_id, productName: x.product_name, productCode: x.product_code || null, operatorId: x.operator_id, operatorName: x.operator_name, quantity: n(x.quantity), grossQuantity: n(x.gross_quantity), defects: n(x.defects), shift: x.shift, productionAt: x.production_at, note: x.note, shiftRunId: x.shift_run_id, cleaningZone: x.cleaning_zone == null ? null : n(x.cleaning_zone), cleaningDone: Boolean(x.cleaning_done), cleaningConfirmedAt: x.cleaning_confirmed_at || null }
 }
 function mapRun(x: any) {
-  return { id: x.id, shiftId: x.shift_id, shiftCode: x.shift_code, shiftName: x.shift_name, operatorId: x.operator_id, operatorName: x.operator_name, productId: x.product_id, productName: x.product_name, shiftDate: x.shift_date, startCounter: n(x.start_counter), endCounter: x.end_counter == null ? null : n(x.end_counter), defects: x.defects == null ? null : n(x.defects), grossQuantity: x.gross_quantity == null ? null : n(x.gross_quantity), goodQuantity: x.good_quantity == null ? null : n(x.good_quantity), startedAt: x.started_at, defectRecordedAt: x.defect_recorded_at, finalizedAt: x.finalized_at, status: x.status, note: x.note }
+  return { id: x.id, shiftId: x.shift_id, shiftCode: x.shift_code, shiftName: x.shift_name, operatorId: x.operator_id, operatorName: x.operator_name, productId: x.product_id, productName: x.product_name, productCode: x.product_code || null, shiftDate: x.shift_date, startCounter: n(x.start_counter), endCounter: x.end_counter == null ? null : n(x.end_counter), defects: x.defects == null ? null : n(x.defects), grossQuantity: x.gross_quantity == null ? null : n(x.gross_quantity), goodQuantity: x.good_quantity == null ? null : n(x.good_quantity), startedAt: x.started_at, defectRecordedAt: x.defect_recorded_at, finalizedAt: x.finalized_at, status: x.status, note: x.note, cleaningZone: x.cleaning_zone == null ? null : n(x.cleaning_zone), cleaningDone: Boolean(x.cleaning_done), cleaningConfirmedAt: x.cleaning_confirmed_at || null }
 }
 
 async function login(req: Request) {
@@ -236,7 +236,7 @@ async function production(req: Request, path: string, method: string, user: AppU
   if (method === 'POST' && path === '/production/end') {
     const b = await body(req)
     if (b.defects === '' || b.defects == null || n(b.defects) < 0) return fail('تعداد معیوب معتبر نیست')
-    const { data, error } = await db.rpc('boostan_end_shift', { p_actor: user.id, p_defects: n(b.defects), p_at: new Date().toISOString(), p_note: b.note || null }); if (error) throw error
+    const { data, error } = await db.rpc('boostan_end_shift_with_cleaning', { p_actor: user.id, p_defects: n(b.defects), p_cleaning_done: Boolean(b.cleaningDone), p_at: new Date().toISOString(), p_note: b.note || null }); if (error) throw error
     return json(data, 201)
   }
   return null
