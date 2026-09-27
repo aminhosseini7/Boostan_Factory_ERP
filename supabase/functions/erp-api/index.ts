@@ -459,14 +459,16 @@ async function operations(req: Request, path: string, method: string, user: AppU
 
 function monthKey(iso:string){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit'}).format(new Date(iso))}
 function dateKey(iso:string){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(iso))}
+function tehranTodayKey(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}
 function addMonthsKey(key:string,delta:number){const [y,m]=key.split('-').map(Number);const d=new Date(Date.UTC(y,m-1+delta,1));return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}`}
 
 async function financeSummary(user: AppUser, url: URL) {
   manager(user)
-  const tehranToday=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+  const tehranToday=tehranTodayKey()
   const from=url.searchParams.get('from')||`${tehranToday.slice(0,7)}-01`
   const to=url.searchParams.get('to')||tehranToday
   if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
+  if(to>tehranToday)return fail('تاریخ پایان گزارش نمی‌تواند بعد از امروز باشد؛ سود و زیان فقط برای دوره تحقق‌یافته محاسبه می‌شود')
   const fromIso=`${from}T00:00:00+03:30`,toIso=`${to}T23:59:59.999+03:30`
   const [{data:prod,error:ep},{data:salesData,error:es},{data:returnsData,error:er},{data:materialsData,error:em},{data:cashData,error:ec},pnl] = await Promise.all([
     db.from('v_production_summary').select('quantity,weight_kg,production_at').gte('production_at',fromIso).lte('production_at',toIso),
@@ -1158,9 +1160,11 @@ async function operationalProfitLoss(fromIso: string, toIso: string) {
 
 async function dashboard(user: AppUser,url:URL) {
   manager(user)
-  const from=url.searchParams.get('from')||new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tehran',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+  const tehranToday=tehranTodayKey()
+  const from=url.searchParams.get('from')||tehranToday
   const to=url.searchParams.get('to')||from
   if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to)return fail('بازه زمانی معتبر نیست')
+  if(to>tehranToday)return fail('تاریخ پایان گزارش نمی‌تواند بعد از امروز باشد؛ سود و زیان فقط برای دوره تحقق‌یافته محاسبه می‌شود')
   const fromIso=`${from}T00:00:00+03:30`,toIso=`${to}T23:59:59.999+03:30`,endExclusive=`${to}T23:59:59.999+03:30`
   const recentSince=new Date(Date.now()-50*60*60*1000).toISOString()
   const [{data:prod,error:ep},{data:salesData,error:es},{data:returnsData,error:ert},{data:snapshot,error:ess},{data:acts,error:ea},{data:fin,error:ef},pnl] = await Promise.all([

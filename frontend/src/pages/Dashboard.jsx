@@ -8,7 +8,7 @@ import JalaliDateInput,{validateJalaliRange} from '../components/JalaliDateInput
 import {formatToman,formatNumber,activityLabel} from '../utils/fa';
 
 const n=v=>formatNumber(v);
-const periodPresets=['امروز','هفته جاری','ماه جاری','سال جاری'];
+const periodPresets=['امروز','دیروز','هفته جاری','ماه جاری','سال جاری'];
 const shortMoney=value=>{
   const amount=Number(value)||0;
   const abs=Math.abs(amount);
@@ -36,6 +36,8 @@ export default function Dashboard(){
     try{
       const range=validateJalaliRange(start,end);
       if(!range.from||!range.to)throw new Error('بازه زمانی را کامل انتخاب کنید.');
+      const todayGregorian=jalaliToGregorianDate(todayJalali());
+      if(range.to>todayGregorian)throw new Error('تاریخ پایان گزارش نمی‌تواند بعد از امروز باشد؛ سود و زیان فقط برای دوره تحقق‌یافته محاسبه می‌شود.');
       const response=await api.get('/dashboard',{params:range});
       if(sequence!==requestSequence.current)return;
       if(!response?.data||typeof response.data!=='object')throw new Error('پاسخ داشبورد معتبر نیست.');
@@ -57,8 +59,19 @@ export default function Dashboard(){
 
   function setPreset(preset){
     const now=todayJalali();
-    let start=now;
-    if(preset==='ماه جاری')start=now.slice(0,7)+'/01';
+    let start=now,end=now;
+    if(preset==='دیروز'){
+      const gd=jalaliToGregorianDate(now);
+      const utc=new Date(`${gd}T12:00:00Z`);
+      utc.setUTCDate(utc.getUTCDate()-1);
+      const parts=new Intl.DateTimeFormat('en-US-u-ca-persian',{
+        timeZone:'UTC',year:'numeric',month:'2-digit',day:'2-digit'
+      }).formatToParts(utc);
+      const part=type=>String(parts.find(x=>x.type===type)?.value||'').padStart(2,'0');
+      const yesterday=`${parts.find(x=>x.type==='year')?.value}/${part('month')}/${part('day')}`;
+      start=yesterday;
+      end=yesterday;
+    } else if(preset==='ماه جاری')start=now.slice(0,7)+'/01';
     else if(preset==='سال جاری')start=now.slice(0,4)+'/01/01';
     else if(preset==='هفته جاری'){
       const gd=jalaliToGregorianDate(now);
@@ -72,9 +85,9 @@ export default function Dashboard(){
       start=`${digits(parts.find(x=>x.type==='year')?.value)}/${digits(parts.find(x=>x.type==='month')?.value)}/${digits(parts.find(x=>x.type==='day')?.value)}`;
     }
     setFrom(start);
-    setTo(now);
+    setTo(end);
     setPeriod(preset);
-    load(start,now,preset);
+    load(start,end,preset);
   }
 
   const productionSeries=useMemo(()=>(d?.productionSeries||[]).map(x=>({...x,label:gregorianKeyToJalali(x.date)})),[d]);
