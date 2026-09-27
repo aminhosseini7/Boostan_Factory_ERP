@@ -135,7 +135,7 @@ export default function Dashboard(){
           <button type="button" onClick={()=>load(from,to,'بازه انتخابی')} disabled={busy}>{busy?'در حال بارگذاری…':'اعمال بازه'}</button>
         </div>
         {activeRange&&<p className="dashboard-active-period">آمار نمایش‌داده‌شده: {periodLabel} (از {activeRange.from} تا {activeRange.to})</p>}
-        <details className="dashboard-help"><summary>راهنمای شاخص‌ها و نحوه محاسبه بازه</summary><p className="hint">موجودی انبار و بدهی مشتریان، مانده در پایان روز آخر بازه هستند؛ فروش، تولید و جریان نقدی فقط مربوط به خود بازه‌اند. ارزش موجودی با قیمت فروش نمایش داده شده و بهای تمام‌شده آن نیست. سود و زیان عملیاتی، هزینه‌های سنگین (HEAVY) را کسر نمی‌کند؛ این پرداخت‌ها همچنان در جریان نقدی دیده می‌شوند.</p></details>
+        <details className="dashboard-help"><summary>راهنمای شاخص‌ها و نحوه محاسبه بازه</summary><p className="hint">موجودی انبار و بدهی مشتریان، مانده در پایان روز آخر بازه هستند؛ فروش، تولید و جریان نقدی فقط مربوط به خود بازه‌اند. ارزش موجودی با قیمت فروش نمایش داده شده و بهای تمام‌شده آن نیست. سود و زیان عملیاتی، سهم روزانه سربار ماه را متناسب با روزهای بازه کسر می‌کند: هزینه‌های NORMAL همان ماه به‌علاوه سهم HEAVY سرشکن‌شده با رشد ۴٪ ماهانه. پرداخت نقدی کامل هزینه‌ها مستقل از این تخصیص در جریان نقدی دیده می‌شود.</p></details>
       </div>
 
       <ErrorBox error={error}/>
@@ -167,14 +167,16 @@ export default function Dashboard(){
           <h3 className="dashboard-section-title">سود و زیان عملیاتی بازه</h3>
           <div className="cards dashboard-secondary">
             <Card label="درآمد خالص عملیاتی" value={formatToman(pnl.netSales)} sub="پس از مرجوعی و تخفیف تسویه"/>
-            <Card label="بهای مواد کالای فروخته‌شده (COGS)" value={formatToman(pnl.materialCogs)} sub="میانگین موزون متحرک"/>
-            <Card label="سود ناخالص پس از مواد" value={formatToman(pnl.grossProfit)}/>
-            <Card label="هزینه‌های عادی دوره" value={formatToman(pnl.normalExpenses)} sub="فقط NORMAL"/>
+            <Card label="بهای مواد سبدهای فروخته‌شده" value={formatToman(pnl.materialCogs)} sub="میانگین موزون متحرک"/>
+            <Card label="سود پس از بهای مواد" value={formatToman(pnl.grossProfit)}/>
+            <Card label="سهم NORMAL در بازه" value={formatToman(pnl.normalExpenses)} sub="سرشکن روزانه از هزینه ماه"/>
+            <Card label="سهم HEAVY در بازه" value={formatToman(pnl.heavyExpensesAllocated)} sub="سرشکن ماهانه با رشد ۴٪"/>
+            <Card label="سربار تخصیص‌یافته به بازه" value={formatToman(pnl.overheadAllocated)} sub="NORMAL + HEAVY"/>
             <Card label="کسری/خروج اصلاحی موجودی" value={formatToman(pnl.inventoryAdjustmentLoss)}/>
-            <Card label="سود / زیان عملیاتی" value={formatToman(pnl.operatingProfit)} sub={`اطمینان بهای فروش: ${pnlConfidence}`}/>
+            <Card label="سود / زیان عملیاتی" value={formatToman(pnl.operatingProfit)} sub={`اطمینان بهای مواد: ${pnlConfidence}`}/>
           </div>
-          <p className="dashboard-pnl-note hint">هزینه‌های سنگین این بازه ({formatToman(pnl.heavyExpensesExcluded)}) از سود و زیان عملیاتی کسر نشده‌اند و فقط اثر نقدی آن‌ها در بخش جریان نقدی باقی می‌ماند. تخفیف‌های زمان وصول ({formatToman(pnl.settlementDiscounts)}) از درآمد عملیاتی کسر شده‌اند.</p>
-          {pnl.costingConfidence!=='HIGH'&&<p className="dashboard-pnl-warning">{pnl.costingConfidence==='REVIEW'?`در بازسازی بهای موجودی، کسری تاریخی مشاهده شد (مواد: ${n(pnl.materialUnderflowQty)} کیلوگرم، محصول: ${n(pnl.finishedUnderflowQty)} عدد). عدد سود قابل استفاده است اما قبل از اتکا مدیریتی بهتر است سوابق موجودی بررسی شوند.`:`بخشی از COGS (${formatToman(pnl.estimatedCogs)}) به موجودی افتتاحیه یا ورودی‌های بدون بهای تاریخی دقیق وابسته است؛ بنابراین سود فعلاً برآوردی است و با گردش موجودی واقعی دقیق‌تر می‌شود.`}</p>}
+          <p className="dashboard-pnl-note hint">سربار هر ماه بر تعداد روزهای واقعی همان ماه شمسی تقسیم شده و فقط سهم روزهای داخل بازه محاسبه می‌شود. سهم HEAVY طبق مدت سرشکن انتخاب‌شده و رشد ۴٪ ماهانه وارد سربار می‌شود. تخفیف‌های زمان وصول ({formatToman(pnl.settlementDiscounts)}) نیز از درآمد عملیاتی کسر شده‌اند.</p>
+          {pnl.costingConfidence!=='HIGH'&&<p className="dashboard-pnl-warning">{pnl.costingConfidence==='REVIEW'?`در بازسازی تاریخی بهای موجودی، خروجی بدون ورودی کافی قبلی دیده شده است (مواد: ${n(pnl.materialUnderflowQty)} کیلوگرم، محصول: ${n(pnl.finishedUnderflowQty)} عدد). این هشدار لزوماً به معنی کسری موجودی فعلی نیست؛ بخشی از بهای تاریخی با مبنای برآوردی تکمیل شده است.`:`بخشی از بهای مواد فروخته‌شده (${formatToman(pnl.estimatedCogs)}) به موجودی افتتاحیه یا ورودی‌های بدون بهای تاریخی دقیق وابسته است؛ بنابراین سود فعلاً برآوردی است و با گردش موجودی واقعی دقیق‌تر می‌شود.`}</p>}
         </>}
 
         <h3 className="dashboard-section-title">موجودی در پایان بازه</h3>

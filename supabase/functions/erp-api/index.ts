@@ -486,15 +486,16 @@ async function financeSummary(user: AppUser, url: URL) {
   const salesAfterReturns=salesAfterInvoiceDiscount-returnsAmount
   const revenue=salesAfterReturns-n(pnl.settlementDiscounts)
   const grossProfit=revenue-n(pnl.materialCogs)
-  const operatingProfit=grossProfit-n(pnl.normalExpenses)-n(pnl.inventoryAdjustmentLoss)
+  const operatingProfit=grossProfit-n(pnl.overheadAllocated)-n(pnl.inventoryAdjustmentLoss)
   const cashIn=(cashData||[]).filter(x=>x.direction==='IN').reduce((a,x)=>a+n(x.amount),0)
   const cashOut=(cashData||[]).filter(x=>x.direction==='OUT').reduce((a,x)=>a+n(x.amount),0)
   return json({
     from,to,productionUnits,productionKg,grossRevenue,invoiceDiscounts,salesAfterInvoiceDiscount,returnsAmount,
     settlementDiscounts:n(pnl.settlementDiscounts),revenue,
     materialCogs:n(pnl.materialCogs),saleCogs:n(pnl.saleCogs),returnCogs:n(pnl.returnCogs),grossProfit,
-    normalExpenses:n(pnl.normalExpenses),inventoryAdjustmentLoss:n(pnl.inventoryAdjustmentLoss),operatingProfit,
-    heavyExpensesExcluded:n(pnl.heavyExpensesExcluded),estimatedCogs:n(pnl.estimatedCogs),estimatedCogsQty:n(pnl.estimatedCogsQty),estimatedShare:n(pnl.estimatedShare),
+    normalExpenses:n(pnl.normalExpenses),heavyExpensesAllocated:n(pnl.heavyExpensesAllocated),overheadAllocated:n(pnl.overheadAllocated),
+    overheadBreakdown:pnl.overheadBreakdown,inventoryAdjustmentLoss:n(pnl.inventoryAdjustmentLoss),operatingProfit,
+    estimatedCogs:n(pnl.estimatedCogs),estimatedCogsQty:n(pnl.estimatedCogsQty),estimatedShare:n(pnl.estimatedShare),
     costingConfidence:pnl.costingConfidence,materialUnderflowQty:n(pnl.materialUnderflowQty),finishedUnderflowQty:n(pnl.finishedUnderflowQty),
     openingBasisSource:pnl.openingBasisSource,method:'MOVING_WEIGHTED_AVERAGE_MATERIAL',
     cashIn,cashOut,netCashFlow:cashIn-cashOut,
@@ -621,6 +622,89 @@ async function costingReadExpenseRows(asOf: string): Promise<any[]> {
     if (!data || data.length < pageSize) break
   }
   return rows
+}
+
+
+type CostingOverheadMonthAllocation = {
+  monthIndex:number
+  month:string
+  selectedDays:number
+  daysInMonth:number
+  monthlyNormal:number
+  monthlyHeavy:number
+  monthlyTotal:number
+  allocatedNormal:number
+  allocatedHeavy:number
+  allocatedTotal:number
+}
+
+const costingPersianDateFormatter = new Intl.DateTimeFormat('en-US-u-ca-persian-nu-latn', {
+  timeZone: 'Asia/Tehran', year: 'numeric', month: 'numeric', day: 'numeric'
+})
+
+function costingPersianDay(iso:string):number{
+  const date=new Date(iso)
+  if(!Number.isFinite(date.getTime()))throw new Error('تاریخ بازه معتبر نیست')
+  const parts=costingPersianDateFormatter.formatToParts(date)
+  const day=Number(parts.find(x=>x.type==='day')?.value)
+  if(!Number.isInteger(day)||day<1||day>31)throw new Error('روز شمسی بازه قابل تشخیص نیست')
+  return day
+}
+
+function costingGregorianDateKeyToNoonUtc(key:string):Date{
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(key))throw new Error('تاریخ بازه معتبر نیست')
+  const d=new Date(`${key}T12:00:00Z`)
+  if(!Number.isFinite(d.getTime()))throw new Error('تاریخ بازه معتبر نیست')
+  return d
+}
+
+function costingDaysInPersianMonth(sampleIso:string):number{
+  const sample=new Date(sampleIso)
+  const monthIndex=costingPersianMonthIndex(sample.toISOString())
+  const day=costingPersianDay(sample.toISOString())
+  const first=new Date(sample.getTime())
+  first.setUTCDate(first.getUTCDate()-(day-1))
+  let count=0
+  for(let cursor=new Date(first.getTime());count<32;cursor.setUTCDate(cursor.getUTCDate()+1)){
+    if(costingPersianMonthIndex(cursor.toISOString())!==monthIndex)break
+    count++
+  }
+  if(count<29||count>31)throw new Error('تعداد روزهای ماه شمسی قابل تشخیص نیست')
+  return count
+}
+
+function costingAllocateOverheadForRange(expenses:any[],fromIso:string,toIso:string){
+  const fromKey=String(fromIso).slice(0,10),toKey=String(toIso).slice(0,10)
+  const fromDate=costingGregorianDateKeyToNoonUtc(fromKey),toDate=costingGregorianDateKeyToNoonUtc(toKey)
+  if(fromDate.getTime()>toDate.getTime())throw new Error('بازه هزینه معتبر نیست')
+
+  const months=new Map<number,{selectedDays:number;sampleIso:string}>()
+  let safety=0
+  for(let cursor=new Date(fromDate.getTime());cursor.getTime()<=toDate.getTime();cursor.setUTCDate(cursor.getUTCDate()+1)){
+    if(++safety>10000)throw new Error('بازه گزارش برای محاسبه سربار بیش از حد طولانی است')
+    const iso=cursor.toISOString(),monthIndex=costingPersianMonthIndex(iso)
+    const current=months.get(monthIndex)
+    if(current)current.selectedDays++
+    else months.set(monthIndex,{selectedDays:1,sampleIso:iso})
+  }
+
+  let normal=0,heavy=0,total=0
+  const breakdown:CostingOverheadMonthAllocation[]=[]
+  for(const [monthIndex,span] of [...months.entries()].sort((a,b)=>a[0]-b[0])){
+    const daysInMonth=costingDaysInPersianMonth(span.sampleIso)
+    const monthExpense=costingExpensesForMonth(expenses,monthIndex)
+    const ratio=span.selectedDays/daysInMonth
+    const allocatedNormal=monthExpense.normal*ratio
+    const allocatedHeavy=monthExpense.heavy*ratio
+    const allocatedTotal=allocatedNormal+allocatedHeavy
+    normal+=allocatedNormal;heavy+=allocatedHeavy;total+=allocatedTotal
+    breakdown.push({
+      monthIndex,month:costingMonthLabel(monthIndex),selectedDays:span.selectedDays,daysInMonth,
+      monthlyNormal:monthExpense.normal,monthlyHeavy:monthExpense.heavy,monthlyTotal:monthExpense.total,
+      allocatedNormal,allocatedHeavy,allocatedTotal,
+    })
+  }
+  return {normal,heavy,total,breakdown}
 }
 
 const COSTING_OBSERVED_LOOKBACK_DAYS = 90
@@ -901,7 +985,7 @@ async function operationalProfitLoss(fromIso: string, toIso: string) {
   const fromMs = new Date(fromIso).getTime(), toMs = new Date(toIso).getTime()
   const inRange = (iso: string) => { const t = new Date(iso).getTime(); return t >= fromMs && t <= toMs }
 
-  const [materialTx, inventoryTx, purchaseRows, grindingRows, returnRows, standardRows, productRows, materialItems, normalExpenses, heavyExpenses, settlementRows] = await Promise.all([
+  const [materialTx, inventoryTx, purchaseRows, grindingRows, returnRows, standardRows, productRows, materialItems, expenseRows, settlementRows] = await Promise.all([
     fetchAllRows<any>(() => db.from('material_transactions').select('id,material_id,transaction_type,quantity_kg,unit_cost,reference_type,reference_id,occurred_at,created_at').lte('occurred_at', toIso).order('occurred_at',{ascending:true}).order('created_at',{ascending:true}).order('id',{ascending:true})),
     fetchAllRows<any>(() => db.from('inventory_transactions').select('id,product_id,transaction_type,quantity,reference_type,reference_id,occurred_at,created_at').lte('occurred_at', toIso).order('occurred_at',{ascending:true}).order('created_at',{ascending:true}).order('id',{ascending:true})),
     fetchAllRows<any>(() => db.from('purchases').select('id,purchase_type,product_id,unit_price,purchased_at').lte('purchased_at', toIso).order('purchased_at',{ascending:true}).order('id',{ascending:true})),
@@ -910,8 +994,7 @@ async function operationalProfitLoss(fromIso: string, toIso: string) {
     fetchAllRows<any>(() => db.from('v_final_product_standard_cost').select('product_id,material_cost')),
     fetchAllRows<any>(() => db.from('products').select('id,weight_kg')),
     fetchAllRows<any>(() => db.from('material_items').select('id,code')),
-    fetchAllRows<any>(() => db.from('expenses').select('amount,expense_date').eq('cost_type','NORMAL').gte('expense_date',fromIso).lte('expense_date',toIso).order('expense_date',{ascending:true})),
-    fetchAllRows<any>(() => db.from('expenses').select('amount,expense_date').eq('cost_type','HEAVY').gte('expense_date',fromIso).lte('expense_date',toIso).order('expense_date',{ascending:true})),
+    costingReadExpenseRows(toIso),
     fetchAllRows<any>(() => db.from('settlement_discounts').select('amount,created_at').gte('created_at',fromIso).lte('created_at',toIso).order('created_at',{ascending:true})),
   ])
 
@@ -1055,15 +1138,18 @@ async function operationalProfitLoss(fromIso: string, toIso: string) {
   const materialCogs = Math.max(0, saleCogs - returnCogs)
   const estimatedCogs = Math.max(0, estimatedSaleCogs - estimatedReturnCogs)
   const estimatedCogsQty=Math.max(0,estimatedSaleQty-estimatedReturnQty)
-  const normalExpenseTotal = normalExpenses.reduce((s:any,x:any)=>s+n(x.amount),0)
-  const heavyExpenseExcluded = heavyExpenses.reduce((s:any,x:any)=>s+n(x.amount),0)
+  const overheadAllocation=costingAllocateOverheadForRange(expenseRows,fromIso,toIso)
   const settlementDiscounts = settlementRows.reduce((s:any,x:any)=>s+n(x.amount),0)
   const hasUnderflow = materialUnderflowQty > COST_EPS || finishedUnderflowQty > COST_EPS
   const estimatedShare = materialCogs > COST_EPS ? Math.max(0,Math.min(1,estimatedCogs/materialCogs)) : 0
 
   return {
     materialCogs, saleCogs, returnCogs, estimatedCogs, estimatedCogsQty, estimatedShare,
-    normalExpenses:normalExpenseTotal, heavyExpensesExcluded:heavyExpenseExcluded, settlementDiscounts,
+    normalExpenses:overheadAllocation.normal,
+    heavyExpensesAllocated:overheadAllocation.heavy,
+    overheadAllocated:overheadAllocation.total,
+    overheadBreakdown:overheadAllocation.breakdown,
+    settlementDiscounts,
     inventoryAdjustmentLoss, estimatedAdjustmentLoss,
     costingConfidence: hasUnderflow ? 'REVIEW' : estimatedCogsQty > COST_EPS ? 'ESTIMATED' : 'HIGH',
     materialUnderflowQty, finishedUnderflowQty, openingBasisSource,
@@ -1097,17 +1183,18 @@ async function dashboard(user: AppUser,url:URL) {
   const salesAfterReturns=(salesData||[]).reduce((s,x)=>s+n(x.total_amount),0)-(returnsData||[]).reduce((s,x)=>s+n(x.amount_reduction),0)
   const pnlNetSales=salesAfterReturns-n(pnl.settlementDiscounts)
   const grossProfit=pnlNetSales-n(pnl.materialCogs)
-  const operatingProfit=grossProfit-n(pnl.normalExpenses)-n(pnl.inventoryAdjustmentLoss)
+  const operatingProfit=grossProfit-n(pnl.overheadAllocated)-n(pnl.inventoryAdjustmentLoss)
   return json({from,to,todayProduction:(prod||[]).reduce((s,x)=>s+n(x.quantity),0),todayGrossProduction:grossProduction,
     todayDefects:defects,todayDefectRate:grossProduction>0?defects/grossProduction*100:0,
     todayGrossSales:(salesData||[]).reduce((s,x)=>s+n(x.subtotal),0),todaySales:salesAfterReturns,
     inventoryValue:n(snapshot?.inventoryValue),customerDebt:n(snapshot?.customerDebt),rawMaterialReadyKg:n(snapshot?.rawMaterialReadyKg),grindableScrapKg:n(snapshot?.grindableScrapKg),
     monthCashIn:cashIn,monthCashOut:cashOut,monthNetCashFlow:cashIn-cashOut,
     profitLoss:{
-      netSales:pnlNetSales,materialCogs:n(pnl.materialCogs),grossProfit,normalExpenses:n(pnl.normalExpenses),
+      netSales:pnlNetSales,materialCogs:n(pnl.materialCogs),grossProfit,
+      normalExpenses:n(pnl.normalExpenses),heavyExpensesAllocated:n(pnl.heavyExpensesAllocated),overheadAllocated:n(pnl.overheadAllocated),overheadBreakdown:pnl.overheadBreakdown,
       inventoryAdjustmentLoss:n(pnl.inventoryAdjustmentLoss),operatingProfit,settlementDiscounts:n(pnl.settlementDiscounts),
       saleCogs:n(pnl.saleCogs),returnCogs:n(pnl.returnCogs),estimatedCogs:n(pnl.estimatedCogs),estimatedCogsQty:n(pnl.estimatedCogsQty),estimatedShare:n(pnl.estimatedShare),
-      heavyExpensesExcluded:n(pnl.heavyExpensesExcluded),costingConfidence:pnl.costingConfidence,
+      costingConfidence:pnl.costingConfidence,
       materialUnderflowQty:n(pnl.materialUnderflowQty),finishedUnderflowQty:n(pnl.finishedUnderflowQty),
       openingBasisSource:pnl.openingBasisSource,method:'MOVING_WEIGHTED_AVERAGE_MATERIAL'
     },
