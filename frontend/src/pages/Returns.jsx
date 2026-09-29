@@ -64,6 +64,6 @@ export default function Returns(){
     {detail&&type==='CANCEL'&&<div className="warning">با ابطال، باقی‌مانده اقلام این فاکتور به انبار برمی‌گردد و بدهی مشتری اصلاح می‌شود. سابقه ابطال نگهداری می‌شود.</div>}
     <div className="form-grid"><label className="wide">توضیحات<textarea value={note} onChange={e=>setNote(e.target.value)}/></label></div>
     <button disabled={!detail||busy}>{busy?'در حال ثبت…':'ثبت عملیات'}</button></form>
-    <div className="panel"><h3>سوابق مرجوعی و ابطال</h3>{history.length===0?<Empty/>:<div className="report-table"><table><thead><tr><th>نوع</th><th>مشتری</th><th>کاهش مبلغ فروش</th><th>بازپرداخت</th><th>تاریخ</th></tr></thead><tbody>{history.map(x=><tr key={x.id}><td>{x.returnType==='CANCEL'?'ابطال':'مرجوعی'}</td><td>{x.customerName||'نقدی'}</td><td>{formatToman(x.amountReduction)}</td><td>{formatToman(x.refundAmount)}</td><td>{formatJalaliDateTime(x.returnedAt)}</td></tr>)}</tbody></table></div>}</div>
+    <div className="panel"><h3>سوابق مرجوعی و ابطال</h3>{history.length===0?<Empty/>:<div className="report-table table-swipe"><table><thead><tr><th>نوع</th><th>مشتری</th><th>کاهش مبلغ فروش</th><th>بازپرداخت</th><th>تاریخ</th></tr></thead><tbody>{history.map(x=><tr key={x.id}><td>{x.returnType==='CANCEL'?'ابطال':'مرجوعی'}</td><td>{x.customerName||'نقدی'}</td><td>{formatToman(x.amountReduction)}</td><td>{formatToman(x.refundAmount)}</td><td>{formatJalaliDateTime(x.returnedAt)}</td></tr>)}</tbody></table></div>}</div>
   </Page>
 }
