@@ -165,3 +165,37 @@
   .report-table.table-swipe{overflow:visible!important;direction:rtl;padding-bottom:0}
   .report-table.table-swipe>table{width:100%!important;min-width:0!important}
 }
+
+/* Compact table layout v6: remove artificial table widths and reduce wasted horizontal space. */
+table{table-layout:auto}
+th,td{padding:7px 6px}
+th{white-space:normal;line-height:1.45}
+td{white-space:nowrap}
+
+/* Tables should fill the card, but only become wider when their real content requires it. */
+.report-table>table,
+.report-table.table-swipe>table,
+.table-scroll table,
+.production-table{
+  width:max-content!important;
+  min-width:100%!important;
+}
+
+/* Explicitly override older mobile/table rules that forced 680-900px widths. */
+@media(max-width:900px){
+  .report-table.table-swipe>table,
+  .table-scroll table,
+  .production-table{min-width:100%!important}
+}
+@media(max-width:650px){
+  th,td{padding:6px 5px}
+  .report-table.table-swipe>table,
+  .table-scroll table,
+  .production-table{min-width:100%!important}
+}
+@media(max-width:420px){
+  .report-table.table-swipe>table,
+  .table-scroll table,
+  .production-table{min-width:100%!important}
+}
+
