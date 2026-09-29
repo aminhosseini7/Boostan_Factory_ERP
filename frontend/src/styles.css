@@ -118,7 +118,7 @@
 .cleaning-check{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid #cbd5e1;border-radius:9px;background:#f8fafc;color:#334155;cursor:pointer}.cleaning-check input{width:auto;min-width:18px;height:18px;margin:0}.production-table-scroll{max-height:62vh;overflow:auto;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y;overscroll-behavior:contain}.production-table{min-width:900px}.production-table th{position:sticky;top:0;z-index:1}.cleaning-status{text-align:center;font-size:18px;min-width:54px}
 :root[data-theme="dark"] .cleaning-check{background:#1e293b;color:#f8fafc;border-color:#475569}
 
-/* Mobile table swipe v3: real touch-scroll container for wide RTL tables. */
+/* Mobile table swipe v5: JS initializes the viewport at the right edge; table content stays RTL. */
 .panel,.grid2,.grid2>*{min-width:0}
 .report-table.table-swipe{
   display:block;
