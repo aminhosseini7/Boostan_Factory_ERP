@@ -181,9 +181,36 @@ async function customers(req: Request, path: string, method: string, user: AppUs
     ])
     if (ec || es || ep || eb) throw ec || es || ep || eb
     if (!customer) return fail('مشتری پیدا نشد', 404)
+    // Read the original line quantities and current product codes in batches.
+    // Never infer quantities from invoice totals or prices.
+    const itemMap=new Map<string,{productId:string,productCode:string|null,quantity:number}[]>()
+    const statementSaleIds=(sales||[]).map((s:any)=>String(s.id))
+    for(let start=0;start<statementSaleIds.length;start+=75){
+      const batch=statementSaleIds.slice(start,start+75)
+      for(let offset=0;;offset+=500){
+        const {data:lines,error:linesError}=await db.from('sale_items')
+          .select('sale_id,product_id,quantity,products(code)')
+          .in('sale_id',batch)
+          .order('id',{ascending:true})
+          .range(offset,offset+499)
+        if(linesError)throw linesError
+        for(const line of lines||[]){
+          const grouped=itemMap.get(line.sale_id)||[]
+          const existing=grouped.find(x=>x.productId===line.product_id)
+          if(existing)existing.quantity+=n(line.quantity)
+          else grouped.push({
+            productId:line.product_id,
+            productCode:typeof line.products?.code==='string'?(line.products.code.trim()||null):null,
+            quantity:n(line.quantity)
+          })
+          itemMap.set(line.sale_id,grouped)
+        }
+        if(!lines||lines.length<500)break
+      }
+    }
     const {data:discountRows,error:discountError}=await db.from('settlement_discounts').select('id,amount,note,created_at,payment_id').eq('customer_id',statementId).order('created_at',{ascending:false})
     if(discountError)throw discountError
-    return json({discounts:(discountRows||[]).map(x=>({id:x.id,amount:n(x.amount),note:x.note,createdAt:x.created_at,paymentId:x.payment_id})),discountTotal:n(bal?.discounts_total), customer: mapCustomer(customer), sales: (sales || []).map(x => ({ id: x.id, totalAmount: n(x.total_amount), netTotal: n(x.net_total), returnedAmount: n(x.returned_amount), paymentType: x.payment_type, paymentAmount: n(x.payment_amount), status: x.status, soldAt: x.sold_at })), payments: (pays || []).map(x => ({ id: x.id, saleId: x.sale_id, amount: n(x.amount), paymentMethod: x.payment_method, paidAt: x.paid_at, note: x.note })), balance: n(bal?.balance) })
+    return json({discounts:(discountRows||[]).map(x=>({id:x.id,amount:n(x.amount),note:x.note,createdAt:x.created_at,paymentId:x.payment_id})),discountTotal:n(bal?.discounts_total), customer: mapCustomer(customer), sales: (sales || []).map(x => ({ id: x.id, totalAmount: n(x.total_amount), netTotal: n(x.net_total), returnedAmount: n(x.returned_amount), paymentType: x.payment_type, paymentAmount: n(x.payment_amount), status: x.status, soldAt: x.sold_at, items:itemMap.get(x.id)||[] })), payments: (pays || []).map(x => ({ id: x.id, saleId: x.sale_id, amount: n(x.amount), paymentMethod: x.payment_method, paidAt: x.paid_at, note: x.note })), balance: n(bal?.balance) })
   }
   if (method === 'GET' && id) {
     const { data, error } = await db.from('customers').select('*').eq('id', id).maybeSingle(); if (error) throw error
